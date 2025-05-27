@@ -1,0 +1,90 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50;
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+      'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+      sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  code {
+    font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
+      monospace;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 10px; }
+::-webkit-scrollbar-thumb { background: #888; border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: #555; }
+
+/* Section Headers */
+.section-header {
+  @apply text-2xl font-semibold mb-4 text-gray-700 pb-2 border-b-2 border-gray-200;
+}
+
+.subsection-header {
+  @apply text-xl font-semibold text-gray-800 mt-6 mb-4 pb-2 border-b border-gray-300;
+}
+
+/* Wrapper for charts and summaries */
+.viz-wrapper {
+  @apply bg-white p-6 rounded-xl shadow-lg w-full mb-6 flex flex-col;
+}
+
+@media (min-width: 768px) {
+  .viz-wrapper { width: calc(50% - 0.75rem); }
+}
+
+@media (min-width: 1024px) {
+  .viz-wrapper { width: calc(33.3333% - 1rem); }
+  .viz-wrapper.full-width-lg { width: calc(66.6666% - 1rem); }
+  .viz-wrapper.full-width-xl { width: 100%; }
+}
+
+/* Chart canvas container */
+.chart-canvas-container {
+  @apply relative h-[300px] w-full flex-grow mt-2;
+}
+
+/* Download buttons */
+.download-button {
+  @apply py-1.5 px-3 rounded-md text-sm font-medium mt-3 transition-colors mr-2;
+}
+
+.download-csv-button {
+  @apply bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200;
+}
+
+.download-png-button {
+  @apply bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200;
+}
+
+.download-all-png-button {
+  @apply bg-orange-300 text-orange-700 px-4 py-2 rounded-md font-medium transition-colors border border-orange-400 hover:bg-orange-200;
+}
+
+/* Chart actions */
+.chart-actions-container {
+  @apply flex flex-wrap justify-start items-center mt-2;
+}
+
+.individual-chart-type-select {
+  @apply ml-2 py-1 px-2 rounded-md border border-gray-300 text-sm bg-gray-50;
+}
+
+/* Editable headers */
+h4[contenteditable="true"]:hover {
+  @apply bg-sky-50 outline outline-1 outline-dashed outline-sky-500 cursor-text;
+}
+
+h4[contenteditable="true"]:focus {
+  @apply bg-sky-100 outline outline-2 outline-sky-600;
+}
