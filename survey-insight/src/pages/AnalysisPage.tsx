@@ -1,11 +1,16 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import useSurveyStore from '../store/surveyStore';
+import ChartCard from '../components/ChartCard';
+import { LIKERT_SCALES, LikertScale } from '../utils/likertScales';
+import { ChartType, QuestionType } from '../types';
 
 // 복수응답 문항의 '_Others'를 '기타'로 묶어 카운팅하는 분석용 데이터 생성 함수
 function getProcessedRows(surveyData: any) {
+  console.log('getProcessedRows - 입력 데이터:', surveyData);
   if (!surveyData) return [];
   const processedRows = surveyData.rows.map((row: any[]) => [...row]);
+  console.log('getProcessedRows - 처리된 행:', processedRows);
   surveyData.questionTypes.forEach((qt: any) => {
     if (qt.type === 'multiple_select') {
       const colIdx = qt.columnIndex;
@@ -21,15 +26,19 @@ function getProcessedRows(surveyData: any) {
       });
     }
   });
+  console.log('getProcessedRows - 최종 처리된 데이터:', processedRows);
   return processedRows;
 }
 
 const chartTypes = [
-  { value: 'bar', label: '막대그래프' },
-  { value: 'pie', label: '파이차트' },
-  { value: 'doughnut', label: '도넛차트' },
-  { value: 'horizontalBar', label: '가로 막대' },
-  { value: 'likert', label: '리커트 평균/비율' },
+  { value: 'vertical', label: '세로 비율' },
+  { value: 'horizontal', label: '가로 비율' },
+  { value: 'verticalStacked', label: '세로 전체 누적' },
+  { value: 'horizontalStacked', label: '가로 전체 누적' },
+  { value: 'pie', label: '원형' },
+  { value: 'donut', label: '도넛형' },
+  { value: 'verticalMatrix', label: '세로 비율(행렬형)' },
+  { value: 'horizontalMatrix', label: '가로 비율(행렬형)' },
 ];
 
 // 유형별 라벨과 색상 정의 (QuestionTypePage.tsx와 동일하게)
@@ -48,13 +57,36 @@ const typeColors = {
   multiple_select: 'text-orange-800'
 };
 
+// 2. 공통 prefix 직접 추출 함수(블록 밖으로 이동)
+function findCommonPrefix(strings: string[]) {
+  if (!strings.length) return '';
+  let prefix = strings[0];
+  for (let i = 1; i < strings.length; i++) {
+    while (strings[i].indexOf(prefix) !== 0) {
+      prefix = prefix.slice(0, -1);
+      if (!prefix) return '';
+    }
+  }
+  return prefix.trim();
+}
+
 const AnalysisPage: React.FC = () => {
   const navigate = useNavigate();
   const { surveyData } = useSurveyStore();
+  console.log('AnalysisPage - surveyData:', surveyData);
   const [search, setSearch] = useState('');
   const [selectedQuestions, setSelectedQuestions] = useState<number[]>([]);
-  const [selectedChartType, setSelectedChartType] = useState(chartTypes[0].value);
-  const [charts, setCharts] = useState<any[]>([]); // {questionIndex, chartType}
+  const [selectedChartType, setSelectedChartType] = useState<ChartType>('vertical');
+  const [charts, setCharts] = useState<Array<{
+    questionIndex: number;
+    chartType: ChartType;
+    questionType: QuestionType;
+    gridSize: { w: number; h: number };
+    data: Array<{ label: string; value: number; isOther?: boolean }>;
+    colors?: string[];
+    respondentCount: number;
+    matrixTitle?: string;
+  }>>([]);
 
   if (!surveyData) {
     navigate('/upload');
@@ -79,7 +111,235 @@ const AnalysisPage: React.FC = () => {
 
   // 그래프 생성
   const handleCreateCharts = () => {
-    const newCharts = selectedQuestions.map(qIdx => ({ questionIndex: qIdx, chartType: selectedChartType }));
+    console.log('handleCreateCharts - 시작');
+    console.log('handleCreateCharts - surveyData:', surveyData);
+    console.log('handleCreateCharts - processedRows:', processedRows);
+    console.log('handleCreateCharts - selectedQuestions:', selectedQuestions);
+    
+    // matrixGroupId별로 그룹핑
+    const matrixGroups: Record<number, any[]> = {};
+    surveyData.questionTypes.forEach((qt: any) => {
+      if (qt.type === 'matrix' && qt.matrixGroupId !== undefined) {
+        if (!matrixGroups[qt.matrixGroupId]) matrixGroups[qt.matrixGroupId] = [];
+        matrixGroups[qt.matrixGroupId].push(qt);
+      }
+    });
+
+    const newCharts: any[] = [];
+    const usedMatrixGroups = new Set<number>();
+
+    selectedQuestions.forEach(qIdx => {
+      const qt = surveyData.questionTypes.find((qt: any) => qt.columnIndex === qIdx);
+      if (!qt) return;
+      // matrix 그룹 처리
+      if (qt.type === 'matrix' && qt.matrixGroupId !== undefined) {
+        if (usedMatrixGroups.has(qt.matrixGroupId)) return; // 이미 처리한 그룹은 스킵
+        usedMatrixGroups.add(qt.matrixGroupId);
+        const groupQs = matrixGroups[qt.matrixGroupId];
+        // 1. groupQs의 전체 질문 텍스트 배열
+        const questionTexts = groupQs.map((q: any) => surveyData.questions[q.columnIndex] || '');
+        // 2. 공통 prefix 직접 추출
+        const commonPrefix = findCommonPrefix(questionTexts);
+        // 3. diff(뒷부분) 추출 (fallback 개선)
+        const diffs = questionTexts.map(q => {
+          const diff = q.slice(commonPrefix.length).trim();
+          // diff가 너무 짧거나, 공통 prefix와 동일하면 전체 질문 사용
+          return (!diff || diff === commonPrefix.trim()) ? q : diff;
+        });
+        // 각 문항별 평균점수 계산 및 디버깅
+        const data = groupQs.map((mq: any, idx: number) => {
+          const allValues = processedRows.map((row: any[]) => row[mq.columnIndex]).filter((v: any) => typeof v === 'string' && v.trim() !== '');
+          // 1. scoreMap이 있으면 그걸 우선 사용
+          const scoreMap = mq.scoreMap || (mq.responseOrder && mq.scores
+            ? Object.fromEntries(mq.responseOrder.map((resp: string, i: number) => [resp, mq.scores[i]]))
+            : undefined);
+          let sum = 0, cnt = 0;
+          if (scoreMap) {
+            allValues.forEach((v: string) => {
+              const score = scoreMap[v];
+              if (typeof score === 'number') {
+                sum += score;
+                cnt++;
+              }
+            });
+          } else {
+            // LIKERT_SCALES 추정 fallback
+            const scale = LIKERT_SCALES.find(s => s.responses.every(r => mq.options?.includes(r)));
+            // 디버깅: diff, options, 실제 응답값, scale, scale.responses
+            console.log('[matrix 디버깅]', {
+              diff: diffs[idx],
+              options: mq.options,
+              allValues,
+              scale,
+              scaleResponses: scale?.responses,
+            });
+            if (!scale) {
+              console.warn(`[matrix] scale 매칭 실패:`, mq, allValues);
+            }
+            if (!allValues.length) {
+              console.warn(`[matrix] 응답 데이터 없음:`, mq);
+            }
+            if (scale) {
+              allValues.forEach((v: string) => {
+                const sidx = scale.responses.indexOf(v);
+                if (sidx !== -1) {
+                  sum += scale.scores[sidx];
+                  cnt++;
+                }
+              });
+            }
+            // scale 매칭이 실패했거나, sidx가 -1인 경우에도 숫자형 응답은 점수로 환산
+            if ((!scale || cnt === 0) && allValues.length > 0) {
+              allValues.forEach((v: string) => {
+                const num = parseFloat(v.replace(/[^0-9.]/g, ''));
+                if (!isNaN(num)) {
+                  sum += num;
+                  cnt++;
+                }
+              });
+            }
+          }
+          const avg = cnt > 0 ? Math.round((sum / cnt) * 100) / 100 : 0;
+          // 디버깅용 콘솔
+          console.log(`[matrix] 문항 diff:`, diffs[idx], '응답수:', allValues.length, '평균:', avg);
+          return { label: diffs[idx] || '', value: avg };
+        });
+        // matrixRespondentCount: 첫 문항의 응답자 수
+        const matrixRespondentCount = groupQs.length > 0
+          ? processedRows.filter((row: any[]) => {
+              const value = row[groupQs[0].columnIndex];
+              return typeof value === 'string' && value.trim() !== '';
+            }).length
+          : 0;
+        // diff가 모두 60자 이상(설명문)인 경우 차트 생성하지 않음(단, 응답 데이터가 없을 때만)
+        const isAllDiffLong = diffs.every(d => d.length >= 60);
+        // 모든 value가 0이거나 응답 데이터가 없고, diff가 모두 설명문(60자 이상)일 때만 차트 생성하지 않음
+        if ((data.every(d => d.value === 0) || matrixRespondentCount === 0) && isAllDiffLong) {
+          console.warn(`[matrix] 차트 생성 제외: 응답 데이터 없음 + diff가 모두 설명문`, groupQs, data, diffs);
+          return;
+        }
+        newCharts.push({
+          questionIndex: `matrix_${qt.matrixGroupId}`,
+          chartType: 'verticalMatrix',
+          questionType: 'matrix',
+          gridSize: { w: 1, h: 1 },
+          data,
+          colors: undefined,
+          respondentCount: matrixRespondentCount,
+          matrixTitle: commonPrefix
+        });
+      } else {
+        // 일반 문항 기존대로
+        const questionType = (qt?.type || 'multiple') as QuestionType;
+        let chartData: Array<{ label: string; value: number; isOther?: boolean }> = [];
+        let chartColors: string[] | undefined = undefined;
+        let respondentCount = 0;
+        if (questionType === 'multiple' || questionType === 'multiple_select') {
+          const options = new Set<string>();
+          let otherCount = 0;
+          processedRows.forEach((row: any[]) => {
+            const value = row[qIdx];
+            if (typeof value === 'string') {
+              if (questionType === 'multiple_select') {
+                value.split('@@').forEach(v => {
+                  const trimmed = v.trim();
+                  if (trimmed.includes('Others_')) {
+                    otherCount++;
+                  } else {
+                    options.add(trimmed);
+                  }
+                });
+              } else {
+                if (value.trim().includes('Others_')) {
+                  otherCount++;
+                } else {
+                  options.add(value.trim());
+                }
+              }
+            }
+          });
+          chartData = Array.from(options).map(option => {
+            let count = 0;
+            processedRows.forEach((row: any[]) => {
+              const value = row[qIdx];
+              if (typeof value === 'string') {
+                if (questionType === 'multiple_select') {
+                  if (value.split('@@').some(v => v.trim() === option)) count++;
+                } else {
+                  if (value.trim() === option) count++;
+                }
+              }
+            });
+            return {
+              label: option,
+              value: count,
+              isOther: false
+            };
+          });
+          if (otherCount > 0) {
+            chartData.push({
+              label: '기타',
+              value: otherCount,
+              isOther: true
+            });
+          }
+          respondentCount = processedRows.filter((row: any[]) => {
+            const value = row[qIdx];
+            return typeof value === 'string' && value.trim() !== '';
+          }).length;
+        } else if (questionType === 'likert') {
+          const allValues = processedRows.map((row: any[]) => row[qIdx]).filter((v: any) => typeof v === 'string' && v.trim() !== '');
+          const bestScale = LIKERT_SCALES.reduce<{ scale: LikertScale | undefined; score: number }>((acc, scale) => {
+            let match = 0;
+            (allValues as string[]).forEach((v: string) => {
+              if (scale.responses.includes(v)) match += 2;
+              else if (scale.positive_keywords.some((k: string) => v.includes(k)) || scale.negative_keywords.some((k: string) => v.includes(k))) match += 1;
+            });
+            return match > acc.score ? { scale, score: match } : acc;
+          }, { scale: undefined, score: 0 }).scale;
+          if (bestScale) {
+            const counts: Record<string, number> = {};
+            bestScale.responses.forEach((label: string) => { counts[label] = 0; });
+            let sum = 0, cnt = 0;
+            (allValues as string[]).forEach((v: string) => {
+              const idx = bestScale ? bestScale.responses.indexOf(v) : -1;
+              if (idx !== -1) {
+                counts[v]++;
+                sum += bestScale ? bestScale.scores[idx] : 0;
+                cnt++;
+              }
+            });
+            chartData = bestScale.responses.map((label: string, i: number) => ({
+              label,
+              value: counts[label],
+            }));
+            chartColors = bestScale.colors;
+          } else {
+            chartData = [];
+            chartColors = undefined;
+          }
+          respondentCount = allValues.length;
+        } else if (questionType === 'open') {
+          respondentCount = processedRows.filter((row: any[]) => {
+            const value = row[qIdx];
+            return typeof value === 'string' && value.trim() !== '';
+          }).length;
+          chartData = [
+            { label: '응답 수', value: respondentCount }
+          ];
+        }
+        newCharts.push({
+          questionIndex: qIdx,
+          chartType: selectedChartType,
+          questionType,
+          gridSize: { w: 1, h: 1 },
+          data: chartData,
+          colors: chartColors,
+          respondentCount
+        });
+      }
+    });
+    console.log('handleCreateCharts - 생성된 차트:', newCharts);
     setCharts(prev => [...prev, ...newCharts.filter(nc => !prev.some(c => c.questionIndex === nc.questionIndex))]);
   };
 
@@ -87,11 +347,37 @@ const AnalysisPage: React.FC = () => {
   const handleDeleteChart = (qIdx: number) => {
     setCharts(prev => prev.filter(c => c.questionIndex !== qIdx));
   };
-  const handleDeleteAllCharts = () => setCharts([]);
 
   // 그래프 유형 개별 변경
-  const handleChartTypeChange = (qIdx: number, newType: string) => {
+  const handleChartTypeChange = (qIdx: number, newType: ChartType) => {
     setCharts(prev => prev.map(c => c.questionIndex === qIdx ? { ...c, chartType: newType } : c));
+  };
+
+  // 문항 유형 변경
+  const handleQuestionTypeChange = (qIdx: number, newType: QuestionType) => {
+    setCharts(prev => prev.map(c => c.questionIndex === qIdx ? { ...c, questionType: newType } : c));
+  };
+
+  // 데이터 테이블 편집
+  const handleDataTableEdit = (qIdx: number, newData: any[]) => {
+    setCharts(prev => prev.map(c => c.questionIndex === qIdx ? { ...c, data: newData } : c));
+  };
+
+  // 카드 크기 변경
+  const handleGridSizeChange = (qIdx: number, newSize: { w: number; h: number }) => {
+    setCharts(prev => prev.map(c => c.questionIndex === qIdx ? { ...c, gridSize: newSize } : c));
+  };
+
+  // 카드 복제
+  const handleDuplicateChart = (qIdx: number) => {
+    const chartToDuplicate = charts.find(c => c.questionIndex === qIdx);
+    if (chartToDuplicate) {
+      const newChart = {
+        ...chartToDuplicate,
+        questionIndex: Date.now(), // 임시로 고유 ID 생성
+      };
+      setCharts(prev => [...prev, newChart]);
+    }
   };
 
   // 보고서로 이동(목업)
@@ -122,6 +408,37 @@ const AnalysisPage: React.FC = () => {
         {/* 좌측: 문항 선택 패널 */}
         <aside className="w-[520px] bg-white rounded-lg shadow p-4 flex flex-col h-[calc(100vh-64px)] mr-4">
           <div className="mb-2 font-bold text-lg">문항 선택</div>
+          
+          {/* 그래프 설정/생성 영역을 상단으로 이동 */}
+          <div className="flex items-center gap-2 mb-4">
+            <select
+              value={selectedChartType}
+              onChange={e => setSelectedChartType(e.target.value as ChartType)}
+              className="border rounded px-2 py-1 text-sm flex-1"
+            >
+              {chartTypes.map(ct => (
+                <option key={ct.value} value={ct.value}>{ct.label}</option>
+              ))}
+            </select>
+            <button
+              onClick={() => {
+                console.log('그래프 생성 버튼 클릭');
+                handleCreateCharts();
+              }}
+              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+              disabled={selectedQuestions.length === 0}
+            >
+              그래프 생성
+            </button>
+            <button
+              onClick={() => setCharts([])}
+              className="px-3 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-xs"
+              disabled={charts.length === 0}
+            >
+              전체 삭제
+            </button>
+          </div>
+
           <input
             type="text"
             className="w-full mb-2 px-2 py-1 border rounded text-sm"
@@ -129,6 +446,7 @@ const AnalysisPage: React.FC = () => {
             value={search}
             onChange={e => setSearch(e.target.value)}
           />
+          
           {/* 전체 선택(주관식 제외) 체크박스 */}
           <div className="flex items-center mb-2">
             <input
@@ -139,6 +457,7 @@ const AnalysisPage: React.FC = () => {
             />
             <span className="text-sm">전체 선택(주관식 제외)</span>
           </div>
+
           <div className="flex-1 overflow-y-auto">
             {Object.entries(groupedQuestions).map(([type, questions]) => {
               const t = type as keyof typeof typeLabels;
@@ -191,13 +510,15 @@ const AnalysisPage: React.FC = () => {
                             const fullText = surveyData.questions[qt.columnIndex] || '';
                             const prefix = groupQs[0]?.commonPrefix || '';
                             let diff = fullText.startsWith(prefix) ? fullText.slice(prefix.length).trim() : fullText;
-                            if (!diff) diff = fullText; // 혹시라도 접두사와 완전히 일치하면 전체 표시
+                            if (!diff) diff = fullText;
                             return (
                               <div key={qt.columnIndex} className="flex items-center mb-1 ml-4">
                                 <input
                                   type="checkbox"
                                   checked={selectedQuestions.includes(qt.columnIndex)}
-                                  onChange={() => handleSelectOne(qt.columnIndex)}
+                                  readOnly
+                                  disabled
+                                  style={{ opacity: 0.5, pointerEvents: 'none' }}
                                 />
                                 <span
                                   className={`text-sm truncate cursor-pointer ${typeColors[t]}`}
@@ -263,72 +584,34 @@ const AnalysisPage: React.FC = () => {
           </div>
         </aside>
 
-        {/* 우측: 그래프 설정/생성/결과 */}
+        {/* 우측: 그래프 결과 영역 */}
         <main className="flex-1 bg-white rounded-lg shadow p-4 flex flex-col min-w-0 h-[calc(100vh-64px)]">
-          {/* 그래프 설정/생성 영역 */}
-          <div className="flex items-center gap-4 mb-4">
-            <select
-              value={selectedChartType}
-              onChange={e => setSelectedChartType(e.target.value)}
-              className="border rounded px-2 py-1 text-sm"
-            >
-              {chartTypes.map(ct => (
-                <option key={ct.value} value={ct.value}>{ct.label}</option>
-              ))}
-            </select>
-            <button
-              onClick={handleCreateCharts}
-              className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
-              disabled={selectedQuestions.length === 0}
-            >
-              그래프 생성
-            </button>
-            <button
-              onClick={handleDeleteAllCharts}
-              className="px-3 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-xs ml-2"
-              disabled={charts.length === 0}
-            >
-              전체 그래프 삭제
-            </button>
-          </div>
-
           {/* 그래프 결과/카드 영역 */}
-          <div className="flex-1 overflow-y-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="flex-1 overflow-y-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {charts.map(c => (
-              <div key={c.questionIndex} className="bg-white rounded shadow p-4 flex flex-col">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="font-semibold text-sm truncate" title={surveyData.questions[c.questionIndex]}>
-                    {surveyData.questions[c.questionIndex]}
-                  </div>
-                  <button
-                    onClick={() => handleDeleteChart(c.questionIndex)}
-                    className="text-xs text-red-500 hover:underline ml-2"
-                  >
-                    삭제
-                  </button>
-                </div>
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-700">{surveyData.questionTypes.find(qt => qt.columnIndex === c.questionIndex)?.type}</span>
-                  <select
-                    value={c.chartType}
-                    onChange={e => handleChartTypeChange(c.questionIndex, e.target.value)}
-                    className="border rounded px-2 py-1 text-xs"
-                  >
-                    {chartTypes.map(ct => (
-                      <option key={ct.value} value={ct.value}>{ct.label}</option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => handleMoveToReport(c.questionIndex)}
-                    className="text-xs bg-green-100 text-green-700 rounded px-2 py-0.5 ml-auto"
-                  >
-                    보고서로 이동
-                  </button>
-                </div>
-                {/* 그래프/차트 실제 렌더링은 추후 구현 */}
-                <div className="flex-1 flex items-center justify-center text-gray-400 text-sm border rounded bg-gray-50 min-h-[120px]">
-                  (그래프 미리보기)
-                </div>
+              <div
+                key={c.questionIndex}
+                style={{
+                  gridColumn: `span ${c.gridSize.w}`,
+                  gridRow: `span ${c.gridSize.h * 2}`
+                }}
+              >
+                <ChartCard
+                  questionIndex={c.questionIndex}
+                  question={surveyData.questions[c.questionIndex] || `문항 ${c.questionIndex + 1}`}
+                  questionType={c.questionType}
+                  chartType={c.chartType}
+                  data={c.data}
+                  colors={c.colors}
+                  respondentCount={c.respondentCount}
+                  onChartTypeChange={(newType) => handleChartTypeChange(c.questionIndex, newType)}
+                  onQuestionTypeChange={(newType) => handleQuestionTypeChange(c.questionIndex, newType)}
+                  onDataTableEdit={(newData) => handleDataTableEdit(c.questionIndex, newData)}
+                  gridSize={c.gridSize}
+                  onGridSizeChange={(newSize) => handleGridSizeChange(c.questionIndex, newSize)}
+                  onDuplicate={() => handleDuplicateChart(c.questionIndex)}
+                  onDelete={() => handleDeleteChart(c.questionIndex)}
+                />
               </div>
             ))}
             {charts.length === 0 && (

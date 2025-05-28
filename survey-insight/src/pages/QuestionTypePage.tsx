@@ -28,29 +28,22 @@ const QuestionTypePage: React.FC = () => {
   const handleTypeChange = (columnIndex: number, newType: QuestionType['type']) => {
     const updatedTypes = questionTypes.map(qt => {
       if (qt.columnIndex === columnIndex) {
-        if (newType === 'likert') {
+        if (newType === 'likert' || newType === 'matrix') {
           // 리커트로 변경 시 scale이 없으면 기본값 할당
           const scale = qt.scale || 'satisfaction_5' as 'satisfaction_5';
-          
           // 실제 응답 데이터 가져오기
           const responses = surveyData?.rows
             .map((row: any) => row[columnIndex])
             .filter((value: any): value is string => typeof value === 'string' && value.trim() !== '') || [];
-          
           // 응답을 리커트 척도로 변환
           const likertResponses = LIKERT_SCALES[scale].responses;
           const likertScores = LIKERT_SCALES[scale].scores;
-          
           // 응답 매핑 (가장 유사한 리커트 응답으로 변환)
           const mappedResponses = responses.map(response => {
-            // 정확히 일치하는 응답이 있는지 확인
             const exactMatch = likertResponses.find(r => r === response);
             if (exactMatch) return exactMatch;
-            
-            // 유사도 기반으로 가장 가까운 응답 찾기
             let bestMatch = likertResponses[0];
             let bestScore = 0;
-            
             likertResponses.forEach(likertResp => {
               const similarity = calculateSimilarity(response, likertResp);
               if (similarity > bestScore) {
@@ -58,21 +51,17 @@ const QuestionTypePage: React.FC = () => {
                 bestMatch = likertResp;
               }
             });
-            
             return bestScore > 0.5 ? bestMatch : response;
           });
-          
           // 변환된 응답들의 빈도수 계산
           const responseCount = new Map<string, number>();
           (mappedResponses as string[]).forEach((response: string) => {
             responseCount.set(response, (responseCount.get(response) || 0) + 1);
           });
-          
           // 기타 응답 분리
           const otherResponses = Array.from(responseCount.entries())
             .filter(([response]) => !likertResponses.includes(response))
             .map(([response]) => response);
-          
           // 리커트 응답만 필터링하여 순서대로 정렬
           const orderedResponses = likertResponses
             .filter(response => responseCount.has(response))
@@ -81,14 +70,27 @@ const QuestionTypePage: React.FC = () => {
               const countB = responseCount.get(b) || 0;
               return countB - countA;
             });
-          
+          // 점수 배열 및 scoreMap 생성
+          const allResponses = [...orderedResponses, ...otherResponses];
+          const scores = allResponses.map(resp => {
+            const idx = likertResponses.indexOf(resp);
+            return idx !== -1 ? likertScores[idx] : -1;
+          });
+          const scoreMap = Object.fromEntries(
+            allResponses.map(resp => {
+              const idx = likertResponses.indexOf(resp);
+              return [resp, idx !== -1 ? likertScores[idx] : -1];
+            })
+          );
           return {
             ...qt,
             type: newType,
             scale,
             options: likertResponses,
             otherResponses,
-            responseOrder: [...orderedResponses, ...otherResponses]
+            responseOrder: allResponses,
+            scores,
+            scoreMap
           };
         }
         return { ...qt, type: newType };
@@ -305,8 +307,14 @@ const QuestionTypePage: React.FC = () => {
       const allArr = [...normalArr, ...otherArr];
       const otherResponses = otherArr.map(r => r.response);
       const responseOrder = allArr.map(r => r.response);
+      // 점수 배열 생성 (normalArr만 점수, otherArr은 -1 또는 null)
+      const scores = allArr.map(r => typeof r.score === 'number' ? r.score : -1);
+      // scoreMap 생성
+      const scoreMap = Object.fromEntries(allArr.map(r => [r.response, typeof r.score === 'number' ? r.score : -1]));
       const updatedTypes = questionTypes.map(qt =>
-        qt.columnIndex === columnIndex ? { ...qt, otherResponses, responseOrder } : qt
+        qt.columnIndex === columnIndex
+          ? { ...qt, otherResponses, responseOrder, scores, scoreMap }
+          : qt
       );
       setQuestionTypes(updatedTypes);
       if (surveyData) {
