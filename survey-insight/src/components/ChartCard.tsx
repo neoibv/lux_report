@@ -29,6 +29,9 @@ interface ChartCardProps {
   colors?: string[];
   respondentCount?: number;
   matrixTitle?: string;
+  scoreMap?: Record<string, number>;
+  responseOrder?: string[];
+  scores?: number[];
 }
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend, Title);
@@ -86,7 +89,10 @@ const ChartCard: React.FC<ChartCardProps> = ({
   onDelete,
   colors,
   respondentCount,
-  matrixTitle
+  matrixTitle,
+  scoreMap,
+  responseOrder,
+  scores
 }) => {
   const [dataTableOpen, setDataTableOpen] = useState(false);
 
@@ -129,28 +135,47 @@ const ChartCard: React.FC<ChartCardProps> = ({
     if (dir === 'h-' && gridSize.h > 1) onGridSizeChange({ ...gridSize, h: gridSize.h - 1 });
   };
 
-  // 리커트/행렬형 평균 계산
+  // 리커트/행렬형 평균 계산 (기타응답 제외)
   let avgScore: number | null = null;
   if ((questionType === 'likert' || questionType === 'matrix') && data.length > 0) {
-    // label이 1~5점(혹은 5~1점)일 때만 평균 계산
-    const scoreMap: Record<string, number> = {
-      '매우 만족': 5,
-      '만족': 4,
-      '보통': 3,
-      '불만족': 2,
-      '매우 불만족': 1,
-      '5': 5, '4': 4, '3': 3, '2': 2, '1': 1
-    };
+    // 1. scoreMap이 있으면 그걸 우선 사용
+    let map: Record<string, number> | undefined = scoreMap;
+    if (!map && responseOrder && scores && responseOrder.length === scores.length) {
+      map = Object.fromEntries(responseOrder.map((resp, i) => [resp, scores[i]]));
+    }
     let sum = 0, cnt = 0;
-    data.forEach(d => {
-      const score = scoreMap[d.label] ?? parseInt(d.label);
-      if (!isNaN(score)) {
-        sum += score * d.value;
-        cnt += d.value;
-      }
-    });
+    if (map) {
+      data.filter(d => !d.isOther).forEach(d => {
+        const score = map![d.label];
+        if (typeof score === 'number' && score > 0) {
+          sum += score * d.value;
+          cnt += d.value;
+        }
+      });
+    } else {
+      // fallback: 기존 방식
+      const scoreMapDefault: Record<string, number> = {
+        '매우 만족': 5,
+        '만족': 4,
+        '보통': 3,
+        '불만족': 2,
+        '매우 불만족': 1,
+        '5': 5, '4': 4, '3': 3, '2': 2, '1': 1
+      };
+      data.filter(d => !d.isOther).forEach(d => {
+        const score = scoreMapDefault[d.label] ?? parseInt(d.label);
+        if (!isNaN(score)) {
+          sum += score * d.value;
+          cnt += d.value;
+        }
+      });
+    }
     if (cnt > 0) avgScore = Math.round((sum / cnt) * 100) / 100;
   }
+
+  // 차트 데이터 변환 (백분율 or 점수)
+  const isMatrixChart = chartType === 'verticalMatrix' || chartType === 'horizontalMatrix';
+  const chartValues = isMatrixChart ? sortedData.map(d => d.value) : sortedData.map(d => toPercent(d.value));
 
   // 공통 차트 옵션
   const commonOptions = {
@@ -197,7 +222,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
           labels,
           datasets: [
             {
-              data: sortedData.map(d => d.value),
+              data: chartValues,
               backgroundColor: backgroundColors,
               borderRadius: 0, // 각진 모서리
               barPercentage: 0.75, // 막대 두께 조정
@@ -270,7 +295,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
         data={{
           labels: labels,
           datasets: labels.map((label, index) => ({
-            data: [sortedData[index].value],
+            data: [chartValues[index]],
             label: label,
             backgroundColor: backgroundColors[index],
             stack: 'stack1',
@@ -329,7 +354,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
           labels,
           datasets: [
             {
-              data: sortedData.map(d => d.value),
+              data: chartValues,
               backgroundColor: backgroundColors,
             },
           ],
@@ -355,7 +380,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
           labels,
           datasets: [
             {
-              data: sortedData.map(d => d.value),
+              data: chartValues,
               backgroundColor: backgroundColors,
             },
           ],
@@ -432,9 +457,11 @@ const ChartCard: React.FC<ChartCardProps> = ({
     );
   }
 
+  const chartMaxWidth = sortedData.length >= 7 ? 'max-w-[600px]' : 'max-w-[420px]';
+
   // 모든 차트 타입에서 카드 레이아웃을 반환하도록 통일
   return (
-    <div className="bg-white border border-gray-300 rounded-lg shadow-lg ring-2 ring-blue-200 p-4" style={{ minHeight: 600 }}>
+    <div className="bg-white border border-gray-300 rounded-lg shadow-lg ring-2 ring-blue-200 p-4 flex flex-col" style={{ minHeight: 600 }}>
       <div className="flex justify-between items-start mb-4">
         <h3 className="text-lg font-semibold break-words">{matrixTitle || question}</h3>
         <div className="text-sm text-gray-600">
@@ -442,19 +469,27 @@ const ChartCard: React.FC<ChartCardProps> = ({
         </div>
       </div>
       {/* 평균 점수 표기 (리커트/행렬형) */}
-      {(questionType === 'likert' || questionType === 'matrix') && avgScore !== null && (
-        <div className="mb-2 text-blue-700 font-bold text-base text-center">
-          평균 점수: {avgScore} / 5점
+      {questionType === 'likert' && avgScore !== null && (
+        <div className={`w-full ${chartMaxWidth} mx-auto`}>
+          <div className="mb-2 text-blue-700 font-bold text-base text-center">
+            평균 점수: {avgScore} / 5점
+          </div>
+          <div className="bg-blue-100 rounded h-3 mb-2">
+            <div
+              className="bg-blue-500 h-3 rounded"
+              style={{ width: `${(avgScore / 5) * 100}%`, transition: 'width 0.5s' }}
+            />
+          </div>
         </div>
       )}
       {/* 차트 영역 */}
       <div className="mt-4 flex-1 flex items-center justify-center">
-        <div className="w-full h-[350px] max-w-[420px] mx-auto">
+        <div className={`w-full h-[350px] mx-auto ${chartMaxWidth}`}>
           {chartEl}
         </div>
       </div>
-      {/* --- 기능 버튼/드롭다운을 하단으로 이동 --- */}
-      <div className="flex flex-col md:flex-row md:items-center gap-2 mt-4">
+      {/* --- 옵션/버튼 영역: 항상 카드 하단에 --- */}
+      <div className="flex flex-col md:flex-row md:items-center gap-2 mt-auto">
         <div className="flex gap-2">
           <select
             value={chartType}
@@ -526,7 +561,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
                   </td>
                   <td>{formatNumber(row.value)}</td>
                   <td>{
-                    (questionType === 'likert' || questionType === 'matrix' || questionType === 'open')
+                    (questionType === 'open')
                       ? '-' : `${formatNumber(toPercent(row.value))}%`
                   }</td>
                   <td className="text-center">

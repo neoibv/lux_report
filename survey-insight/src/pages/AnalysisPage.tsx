@@ -73,7 +73,10 @@ function findCommonPrefix(strings: string[]) {
 const AnalysisPage: React.FC = () => {
   const navigate = useNavigate();
   const { surveyData } = useSurveyStore();
-  console.log('AnalysisPage - surveyData:', surveyData);
+  // [검증3] 분석 페이지 진입 시 로그
+  if (surveyData) {
+    console.log('[검증3] 분석 페이지 진입 시 surveyData.questionTypes:', surveyData.questionTypes);
+  }
   const [search, setSearch] = useState('');
   const [selectedQuestions, setSelectedQuestions] = useState<number[]>([]);
   const [selectedChartType, setSelectedChartType] = useState<ChartType>('vertical');
@@ -130,6 +133,8 @@ const AnalysisPage: React.FC = () => {
 
     selectedQuestions.forEach(qIdx => {
       const qt = surveyData.questionTypes.find((qt: any) => qt.columnIndex === qIdx);
+      // [검증4] 차트 생성 시 해당 문항 데이터 로그
+      console.log('[검증4] 차트 생성 시 해당 문항 데이터:', qt);
       if (!qt) return;
       // matrix 그룹 처리
       if (qt.type === 'matrix' && qt.matrixGroupId !== undefined) {
@@ -150,53 +155,51 @@ const AnalysisPage: React.FC = () => {
         const data = groupQs.map((mq: any, idx: number) => {
           const allValues = processedRows.map((row: any[]) => row[mq.columnIndex]).filter((v: any) => typeof v === 'string' && v.trim() !== '');
           // 1. scoreMap이 있으면 그걸 우선 사용
-          const scoreMap = mq.scoreMap || (mq.responseOrder && mq.scores
-            ? Object.fromEntries(mq.responseOrder.map((resp: string, i: number) => [resp, mq.scores[i]]))
-            : undefined);
+          const scoreMap = mq.scoreMap;
           let sum = 0, cnt = 0;
           if (scoreMap) {
             allValues.forEach((v: string) => {
               const score = scoreMap[v];
-              if (typeof score === 'number') {
+              if (typeof score === 'number' && score > 0) {
                 sum += score;
                 cnt++;
               }
             });
           } else {
-            // LIKERT_SCALES 추정 fallback
-            const scale = LIKERT_SCALES.find(s => s.responses.every(r => mq.options?.includes(r)));
-            // 디버깅: diff, options, 실제 응답값, scale, scale.responses
-            console.log('[matrix 디버깅]', {
-              diff: diffs[idx],
-              options: mq.options,
-              allValues,
-              scale,
-              scaleResponses: scale?.responses,
-            });
-            if (!scale) {
-              console.warn(`[matrix] scale 매칭 실패:`, mq, allValues);
-            }
-            if (!allValues.length) {
-              console.warn(`[matrix] 응답 데이터 없음:`, mq);
-            }
-            if (scale) {
+            // 2. responseOrder와 scores가 있으면 그것을 사용
+            if (mq.responseOrder && mq.scores) {
+              const tempScoreMap = Object.fromEntries(
+                mq.responseOrder.map((resp: string, i: number) => [resp, mq.scores[i]])
+              );
               allValues.forEach((v: string) => {
-                const sidx = scale.responses.indexOf(v);
-                if (sidx !== -1) {
-                  sum += scale.scores[sidx];
+                const score = tempScoreMap[v];
+                if (typeof score === 'number' && score > 0) {
+                  sum += score;
                   cnt++;
                 }
               });
-            }
-            // scale 매칭이 실패했거나, sidx가 -1인 경우에도 숫자형 응답은 점수로 환산
-            if ((!scale || cnt === 0) && allValues.length > 0) {
-              allValues.forEach((v: string) => {
-                const num = parseFloat(v.replace(/[^0-9.]/g, ''));
-                if (!isNaN(num)) {
-                  sum += num;
-                  cnt++;
-                }
-              });
+            } else {
+              // 3. LIKERT_SCALES 추정 fallback
+              const scale = LIKERT_SCALES.find(s => s.responses.every(r => mq.options?.includes(r)));
+              if (scale) {
+                allValues.forEach((v: string) => {
+                  const sidx = scale.responses.indexOf(v);
+                  if (sidx !== -1) {
+                    sum += scale.scores[sidx];
+                    cnt++;
+                  }
+                });
+              }
+              // 4. 숫자형 응답 처리
+              if (cnt === 0 && allValues.length > 0) {
+                allValues.forEach((v: string) => {
+                  const num = parseFloat(v.replace(/[^0-9.]/g, ''));
+                  if (!isNaN(num)) {
+                    sum += num;
+                    cnt++;
+                  }
+                });
+              }
             }
           }
           const avg = cnt > 0 ? Math.round((sum / cnt) * 100) / 100 : 0;

@@ -12,57 +12,32 @@ const QuestionTypePage: React.FC = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (surveyData && Object.keys(responseOrders).length === 0) {
-      setQuestionTypes(surveyData.questionTypes);
-      // 초기 응답 순서 설정 (최초 1회만)
-      const initialOrders: Record<number, { response: string, isOther: boolean }[]> = {};
-      surveyData.questionTypes.forEach(qt => {
+    if (
+      surveyData &&
+      Object.keys(responseOrders).length === 0 &&
+      surveyData.questionTypes.some(
+        qt => (qt.type === 'likert' || qt.type === 'matrix') && (!((qt as any).responseOrder) || !((qt as any).scores) || !((qt as any).scoreMap))
+      )
+    ) {
+      // 모든 문항에 대해 responseOrder, scores, scoreMap, otherResponses를 초기화
+      const initializedTypes = surveyData.questionTypes.map(qt => {
         if (qt.type === 'likert' || qt.type === 'matrix') {
-          initialOrders[qt.columnIndex] = getRepresentativeResponses(qt.columnIndex, qt.type);
-        }
-      });
-      setResponseOrders(initialOrders);
-    }
-  }, [surveyData]);
-
-  const handleTypeChange = (columnIndex: number, newType: QuestionType['type']) => {
-    const updatedTypes = questionTypes.map(qt => {
-      if (qt.columnIndex === columnIndex) {
-        if (newType === 'likert' || newType === 'matrix') {
-          // 리커트로 변경 시 scale이 없으면 기본값 할당
           const scale = qt.scale || 'satisfaction_5' as 'satisfaction_5';
-          // 실제 응답 데이터 가져오기
-          const responses = surveyData?.rows
-            .map((row: any) => row[columnIndex])
-            .filter((value: any): value is string => typeof value === 'string' && value.trim() !== '') || [];
-          // 응답을 리커트 척도로 변환
           const likertResponses = LIKERT_SCALES[scale].responses;
           const likertScores = LIKERT_SCALES[scale].scores;
-          // 응답 매핑 (가장 유사한 리커트 응답으로 변환)
-          const mappedResponses = responses.map(response => {
-            const exactMatch = likertResponses.find(r => r === response);
-            if (exactMatch) return exactMatch;
-            let bestMatch = likertResponses[0];
-            let bestScore = 0;
-            likertResponses.forEach(likertResp => {
-              const similarity = calculateSimilarity(response, likertResp);
-              if (similarity > bestScore) {
-                bestScore = similarity;
-                bestMatch = likertResp;
-              }
-            });
-            return bestScore > 0.5 ? bestMatch : response;
-          });
-          // 변환된 응답들의 빈도수 계산
           const responseCount = new Map<string, number>();
-          (mappedResponses as string[]).forEach((response: string) => {
-            responseCount.set(response, (responseCount.get(response) || 0) + 1);
+          const otherResponsesSet = new Set<string>();
+          surveyData.rows.forEach((row: any) => {
+            const value = row[qt.columnIndex];
+            if (typeof value === 'string' && value.trim() !== '') {
+              if (likertResponses.includes(value)) {
+                responseCount.set(value, (responseCount.get(value) || 0) + 1);
+              } else {
+                otherResponsesSet.add(value);
+              }
+            }
           });
-          // 기타 응답 분리
-          const otherResponses = Array.from(responseCount.entries())
-            .filter(([response]) => !likertResponses.includes(response))
-            .map(([response]) => response);
-          // 리커트 응답만 필터링하여 순서대로 정렬
+          const otherResponses = Array.from(otherResponsesSet);
           const orderedResponses = likertResponses
             .filter(response => responseCount.has(response))
             .sort((a, b) => {
@@ -70,7 +45,6 @@ const QuestionTypePage: React.FC = () => {
               const countB = responseCount.get(b) || 0;
               return countB - countA;
             });
-          // 점수 배열 및 scoreMap 생성
           const allResponses = [...orderedResponses, ...otherResponses];
           const scores = allResponses.map(resp => {
             const idx = likertResponses.indexOf(resp);
@@ -82,6 +56,78 @@ const QuestionTypePage: React.FC = () => {
               return [resp, idx !== -1 ? likertScores[idx] : -1];
             })
           );
+          return {
+            ...qt,
+            scale,
+            options: likertResponses,
+            otherResponses,
+            responseOrder: allResponses,
+            scores,
+            scoreMap
+          };
+        }
+        return qt;
+      });
+      setQuestionTypes(initializedTypes);
+      setSurveyData({ ...surveyData, questionTypes: initializedTypes });
+      // 기존 응답 순서도 초기화
+      const initialOrders: Record<number, { response: string, isOther: boolean }[]> = {};
+      initializedTypes.forEach(qt => {
+        if (qt.type === 'likert' || qt.type === 'matrix') {
+          initialOrders[qt.columnIndex] = getRepresentativeResponses(qt.columnIndex, qt.type);
+        }
+      });
+      setResponseOrders(initialOrders);
+    }
+  }, [surveyData]);
+
+  const handleTypeChange = (columnIndex: number, newType: QuestionType['type']) => {
+    console.log('[디버그] handleTypeChange 호출됨', columnIndex, newType);
+    const updatedTypes = questionTypes.map(qt => {
+      if (qt.columnIndex === columnIndex) {
+        if (newType === 'likert' || newType === 'matrix') {
+          // 리커트 응답만 필터링하여 순서대로 정렬
+          const scale = qt.scale || 'satisfaction_5' as 'satisfaction_5';
+          const likertResponses = LIKERT_SCALES[scale].responses;
+          const likertScores = LIKERT_SCALES[scale].scores;
+          const responseCount = new Map<string, number>();
+          const otherResponsesSet = new Set<string>();
+
+          // 실제 응답 데이터에서 빈도수 계산
+          surveyData?.rows.forEach((row: any) => {
+            const value = row[columnIndex];
+            if (typeof value === 'string' && value.trim() !== '') {
+              if (likertResponses.includes(value)) {
+                responseCount.set(value, (responseCount.get(value) || 0) + 1);
+              } else {
+                otherResponsesSet.add(value);
+              }
+            }
+          });
+
+          // 리커트 응답만 필터링하여 순서대로 정렬
+          const orderedResponses = likertResponses
+            .filter(response => responseCount.has(response))
+            .sort((a, b) => {
+              const countA = responseCount.get(a) || 0;
+              const countB = responseCount.get(b) || 0;
+              return countB - countA;
+            });
+
+          // 점수 배열 및 scoreMap 생성
+          const otherResponses = Array.from(otherResponsesSet);
+          const allResponses = [...orderedResponses, ...otherResponses];
+          const scores = allResponses.map(resp => {
+            const idx = likertResponses.indexOf(resp);
+            return idx !== -1 ? likertScores[idx] : -1;
+          });
+          const scoreMap = Object.fromEntries(
+            allResponses.map(resp => {
+              const idx = likertResponses.indexOf(resp);
+              return [resp, idx !== -1 ? likertScores[idx] : -1];
+            })
+          );
+
           return {
             ...qt,
             type: newType,
@@ -104,6 +150,8 @@ const QuestionTypePage: React.FC = () => {
         ...surveyData,
         questionTypes: updatedTypes
       });
+      // [검증1] setSurveyData 직후 로그
+      console.log('[검증1] setSurveyData 직후 surveyData.questionTypes:', updatedTypes);
     }
   };
 
@@ -433,6 +481,7 @@ const QuestionTypePage: React.FC = () => {
 
   // 일반 문항 렌더링
   const renderRegularQuestions = (questions: QuestionType[], type: QuestionType['type']) => {
+    console.log('[디버그] 문항 유형 드롭다운 렌더링', type, type);
     return questions.map(qt => {
       const reps = getRepresentativeResponses(qt.columnIndex, type);
       const normalResponses = reps.filter(item => !item.isOther);
@@ -508,17 +557,27 @@ const QuestionTypePage: React.FC = () => {
     });
   };
 
+  useEffect(() => {
+    console.log('[디버그] useEffect surveyData', surveyData);
+    console.log('[디버그] useEffect questionTypes', questionTypes);
+  }, [surveyData, questionTypes]);
+
   if (!surveyData) {
     navigate('/upload');
     return null;
   }
+
+  console.log('[디버그] QuestionTypePage 렌더링', { surveyData, questionTypes });
 
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-xl font-bold">문항 유형 검토</h1>
         <button
-          onClick={() => navigate('/analysis')}
+          onClick={() => {
+            console.log('[검증2] 분석 시작 버튼 클릭 직전 surveyData.questionTypes:', surveyData.questionTypes);
+            navigate('/analysis');
+          }}
           className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
         >
           분석 시작
