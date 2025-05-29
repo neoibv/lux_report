@@ -258,24 +258,26 @@ const AnalysisPage: React.FC = () => {
               }
             }
           });
-          chartData = Array.from(options).map(option => {
-            let count = 0;
-            processedRows.forEach((row: any[]) => {
-              const value = row[qIdx];
-              if (typeof value === 'string') {
-                if (questionType === 'multiple_select') {
-                  if (value.split('@@').some(v => v.trim() === option)) count++;
-                } else {
-                  if (value.trim() === option) count++;
+          chartData = Array.from(options)
+            .filter(option => option.trim() !== '') // 빈 응답 제외
+            .map(option => {
+              let count = 0;
+              processedRows.forEach((row: any[]) => {
+                const value = row[qIdx];
+                if (typeof value === 'string') {
+                  if (questionType === 'multiple_select') {
+                    if (value.split('@@').some(v => v.trim() === option)) count++;
+                  } else {
+                    if (value.trim() === option) count++;
+                  }
                 }
-              }
+              });
+              return {
+                label: option,
+                value: count,
+                isOther: false
+              };
             });
-            return {
-              label: option,
-              value: count,
-              isOther: false
-            };
-          });
           if (otherCount > 0) {
             chartData.push({
               label: '기타',

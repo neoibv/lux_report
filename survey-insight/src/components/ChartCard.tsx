@@ -57,6 +57,20 @@ function formatNumber(n: number) {
   return n.toLocaleString('ko-KR');
 }
 
+// 라벨 가공 함수 추가
+function ellipsisLabel(label: string, max = 10) {
+  return label.length > max ? label.slice(0, max) + '...' : label;
+}
+
+// 기존 palette가 부족할 때 자동으로 색상 생성
+function generateColorSet(n: number) {
+  const colors = [];
+  for (let i = 0; i < n; i++) {
+    colors.push(`hsl(${(i * 360) / n}, 70%, 60%)`);
+  }
+  return colors;
+}
+
 const ChartCard: React.FC<ChartCardProps> = ({
   questionIndex,
   question,
@@ -92,19 +106,20 @@ const ChartCard: React.FC<ChartCardProps> = ({
     }
   }
 
-  // 복수응답은 value 기준 내림차순 정렬
-  const sortedData = questionType === 'multiple_select'
-    ? [...data].sort((a, b) => b.value - a.value)
-    : data;
+  // 기타응답을 마지막으로 정렬
+  const sortedData = [
+    ...data.filter(d => !d.isOther),
+    ...data.filter(d => d.isOther)
+  ];
 
-  // 차트 데이터 변환 (백분율)
-  const percentValues = sortedData.map(d => toPercent(d.value));
   const labels = sortedData.map(d => d.label);
+
+  // 색상 처리: 기타응답은 무조건 회색, 나머지는 기존 방식
   const backgroundColors = colors
     ? colors.slice(0, sortedData.length)
     : (questionType === 'likert' || questionType === 'matrix')
-      ? likertColors.slice(0, sortedData.length)
-      : sortedData.map((d, i) => d.isOther ? '#E0E0E0' : palette[i % (palette.length - 1)]);
+      ? sortedData.map((d, i) => d.isOther ? '#E0E0E0' : likertColors[i % likertColors.length])
+      : sortedData.map((d, i) => d.isOther ? '#E0E0E0' : generateColorSet(sortedData.length)[i]);
 
   // 카드 크기 조절 예시 (좌/우/상/하 버튼)
   const handleResize = (dir: 'w+' | 'w-' | 'h+' | 'h-') => {
@@ -140,16 +155,34 @@ const ChartCard: React.FC<ChartCardProps> = ({
   // 공통 차트 옵션
   const commonOptions = {
     responsive: true,
+    maintainAspectRatio: false,
     plugins: {
-      legend: { display: chartType === 'pie' || chartType === 'donut' },
-      tooltip: { enabled: true },
+      legend: { 
+        display: chartType === 'pie' || chartType === 'donut',
+        position: 'bottom',
+        labels: {
+          boxWidth: 12,
+          padding: 15
+        }
+      },
+      tooltip: { 
+        enabled: true,
+        padding: 10,
+        backgroundColor: 'rgba(0, 0, 0, 0.8)'
+      },
       title: { display: false },
       // @ts-ignore
       datalabels: {
         display: true,
         color: '#000000',
-        font: { weight: 'bold' },
+        font: { 
+          weight: 'bold',
+          size: 11
+        },
         formatter: (value: number) => `${value}%`,
+        padding: 6,
+        borderRadius: 4,
+        backgroundColor: 'rgba(255, 255, 255, 0.7)'
       },
     },
   };
@@ -164,9 +197,11 @@ const ChartCard: React.FC<ChartCardProps> = ({
           labels,
           datasets: [
             {
-              data: percentValues,
+              data: sortedData.map(d => d.value),
               backgroundColor: backgroundColors,
               borderRadius: 0, // 각진 모서리
+              barPercentage: 0.75, // 막대 두께 조정
+              categoryPercentage: 0.85, // 막대 두께 조정
             },
           ],
         }}
@@ -175,6 +210,15 @@ const ChartCard: React.FC<ChartCardProps> = ({
           indexAxis: chartType === 'vertical' ? 'x' : 'y',
           plugins: {
             ...commonOptions.plugins,
+            tooltip: {
+              ...commonOptions.plugins.tooltip,
+              callbacks: {
+                title: (tooltipItems: any) => {
+                  const idx = tooltipItems[0].dataIndex;
+                  return labels[idx]; // 전체 문항 텍스트
+                }
+              }
+            },
             // @ts-ignore
             datalabels: {
               ...commonOptions.plugins.datalabels,
@@ -185,12 +229,36 @@ const ChartCard: React.FC<ChartCardProps> = ({
           },
           scales: chartType === 'vertical'
             ? {
-                x: { grid: { display: false } },
+                x: {
+                  grid: {
+                    display: true, // 세로선 표시
+                    drawOnChartArea: true,
+                    color: '#e5e7eb', // 연한 회색
+                  },
+                  ticks: {
+                    callback: (v: any, idx: number) => ellipsisLabel(labels[idx], 10),
+                    maxRotation: 45,
+                    minRotation: 0,
+                    autoSkip: false,
+                  },
+                },
                 y: { beginAtZero: true, max: 100, ticks: { callback: (v: any) => `${v}%` } },
               }
             : {
                 x: { beginAtZero: true, max: 100, ticks: { callback: (v: any) => `${v}%` } },
-                y: { grid: { display: false } },
+                y: {
+                  grid: {
+                    display: true, // 가로선 표시
+                    drawOnChartArea: true,
+                    color: '#e5e7eb',
+                  },
+                  ticks: {
+                    callback: (v: any, idx: number) => ellipsisLabel(labels[idx], 10),
+                    maxRotation: 45,
+                    minRotation: 0,
+                    autoSkip: false,
+                  },
+                },
               },
         }}
       />
@@ -200,15 +268,14 @@ const ChartCard: React.FC<ChartCardProps> = ({
     chartEl = (
       <Bar
         data={{
-          labels: [''],
-          datasets: [
-            {
-              data: percentValues,
-              label: '',
-              stack: 'stack1',
-              borderRadius: 0, // 각진 모서리
-            },
-          ],
+          labels: labels,
+          datasets: labels.map((label, index) => ({
+            data: [sortedData[index].value],
+            label: label,
+            backgroundColor: backgroundColors[index],
+            stack: 'stack1',
+            borderRadius: 0,
+          })),
         }}
         options={{
           ...commonOptions,
@@ -220,17 +287,37 @@ const ChartCard: React.FC<ChartCardProps> = ({
               ...commonOptions.plugins.datalabels,
               anchor: 'end',
               align: 'end',
-              formatter: (value: number) => `${formatNumber(value)}%`,
+              formatter: (value: number) => value > 5 ? `${formatNumber(value)}%` : '',
             }
           },
           scales: chartType === 'verticalStacked'
             ? {
                 x: { stacked: true, grid: { display: false } },
-                y: { stacked: true, beginAtZero: true, max: 100, ticks: { callback: (v: any) => `${v}%` } },
+                y: { 
+                  stacked: true, 
+                  beginAtZero: true, 
+                  max: 100, 
+                  ticks: { 
+                    callback: (v: any) => `${v}%`,
+                    font: { size: 11 }
+                  } 
+                },
               }
             : {
-                x: { stacked: true, beginAtZero: true, max: 100, ticks: { callback: (v: any) => `${v}%` } },
-                y: { stacked: true, grid: { display: false } },
+                x: { 
+                  stacked: true, 
+                  beginAtZero: true, 
+                  max: 100, 
+                  ticks: { 
+                    callback: (v: any) => `${v}%`,
+                    font: { size: 11 }
+                  } 
+                },
+                y: { 
+                  stacked: true, 
+                  grid: { display: false },
+                  ticks: { font: { size: 11 } }
+                },
               },
         }}
       />
@@ -242,7 +329,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
           labels,
           datasets: [
             {
-              data: percentValues,
+              data: sortedData.map(d => d.value),
               backgroundColor: backgroundColors,
             },
           ],
@@ -268,7 +355,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
           labels,
           datasets: [
             {
-              data: percentValues,
+              data: sortedData.map(d => d.value),
               backgroundColor: backgroundColors,
             },
           ],
@@ -288,8 +375,8 @@ const ChartCard: React.FC<ChartCardProps> = ({
       />
     );
   } else if (chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') {
-    const matrixLabels = data.map(d => d.label);
-    const matrixValues = data.map(d => d.value);
+    const matrixLabels = sortedData.map(d => d.label);
+    const matrixValues = sortedData.map(d => d.value);
     // 총 응답: 각 문항별 응답 개수(동일하다고 가정, 첫 문항 기준)
     const matrixRespondentCount = respondentCount !== undefined ? respondentCount : undefined;
     chartEl = (
@@ -299,7 +386,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
           datasets: [
             {
               data: matrixValues,
-              backgroundColor: colors ? colors.slice(0, data.length) : palette.slice(0, data.length),
+              backgroundColor: colors ? colors.slice(0, sortedData.length) : palette.slice(0, sortedData.length),
               borderRadius: 0,
             },
           ],
@@ -343,216 +430,124 @@ const ChartCard: React.FC<ChartCardProps> = ({
         }}
       />
     );
-    // 제목/총응답 오버라이드
-    return (
-      <div className="bg-white p-4 rounded-lg shadow" style={{ minHeight: 600 }}>
-        <div className="flex justify-between items-start mb-4">
-          <h3 className="text-lg font-semibold">{matrixTitle}</h3>
-          <div className="text-sm text-gray-600">
-            총 응답: {matrixRespondentCount !== undefined ? formatNumber(matrixRespondentCount) : '-'}개
-          </div>
-        </div>
-        <div className="mt-4 flex-1 flex items-center justify-center min-h-[400px]">
-          <div style={{ width: '100%', height: '100%' }}>
-            {chartEl}
-          </div>
-        </div>
-        {/* --- 기능 버튼/드롭다운을 하단으로 이동 --- */}
-        <div className="flex flex-col md:flex-row md:items-center gap-2 mt-4">
-          <div className="flex gap-2">
-            <select
-              value={chartType}
-              onChange={e => onChartTypeChange(e.target.value as ChartType)}
-              className="border rounded px-2 py-1 text-xs"
-            >
-              <option value="vertical">세로 비율</option>
-              <option value="horizontal">가로 비율</option>
-              <option value="verticalStacked">세로 전체 누적</option>
-              <option value="horizontalStacked">가로 전체 누적</option>
-              <option value="pie">원형</option>
-              <option value="donut">도넛형</option>
-              <option value="verticalMatrix">세로 비율(행렬형)</option>
-              <option value="horizontalMatrix">가로 비율(행렬형)</option>
-            </select>
-            <select
-              value={questionType}
-              onChange={e => onQuestionTypeChange(e.target.value as QuestionType)}
-              className="border rounded px-2 py-1 text-xs"
-            >
-              <option value="likert">리커트 척도</option>
-              <option value="multiple">객관식</option>
-              <option value="multiple_select">복수 응답</option>
-              <option value="open">주관식</option>
-              <option value="matrix">행렬형</option>
-            </select>
-          </div>
-          <div className="flex gap-1">
-            <button onClick={() => handleResize('w-')} className="text-xs px-1">◀</button>
-            <button onClick={() => handleResize('w+')} className="text-xs px-1">▶</button>
-            <button onClick={() => handleResize('h-')} className="text-xs px-1">▲</button>
-            <button onClick={() => handleResize('h+')} className="text-xs px-1">▼</button>
-            {onDuplicate && <button onClick={onDuplicate} className="text-xs px-1 text-blue-500">복제</button>}
-            {onDelete && <button onClick={onDelete} className="text-xs px-1 text-red-500">삭제</button>}
-          </div>
-          <button
-            onClick={() => setDataTableOpen(open => !open)}
-            className="text-xs bg-gray-100 text-gray-700 rounded px-2 py-0.5"
-          >
-            {dataTableOpen ? '데이터 테이블 닫기' : '데이터 테이블 열기'}
-          </button>
-        </div>
-        {/* 데이터 테이블 토글 */}
-        {dataTableOpen && (
-          <div className="mt-2 border rounded bg-gray-50 p-2 text-xs">
-            <div className="mb-1 font-semibold">데이터 테이블 (편집 가능)</div>
-            <table className="w-full border text-xs">
-              <thead>
-                <tr className="bg-gray-100">
-                  <th className="p-1">응답 항목</th>
-                  <th className="p-1">평균점수</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.map((row, idx) => (
-                  <tr key={row.label}>
-                    <td>{row.label}</td>
-                    <td>{row.value.toFixed(2)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    );
-  } else {
-    chartEl = (
-      <div className="bg-white p-4 rounded-lg shadow" style={{ minHeight: 600 }}>
-        <div className="flex justify-between items-start mb-4">
-          <h3 className="text-lg font-semibold break-words">
-            {question}
-          </h3>
-          <div className="text-sm text-gray-600">
-            총 응답: {formatNumber(totalResponses)}개
-          </div>
-        </div>
-        {/* 평균 점수 표기 (리커트/행렬형) */}
-        {(questionType === 'likert' || questionType === 'matrix') && avgScore !== null && (
-          <div className="mb-2 text-blue-700 font-bold text-base text-center">
-            평균 점수: {avgScore} / 5점
-          </div>
-        )}
-        {/* 차트 영역 */}
-        <div className="mt-4 flex-1 flex items-center justify-center min-h-[400px]">
-          <div style={{ width: '100%', height: '100%' }}>
-            {chartEl}
-          </div>
-        </div>
-        {/* --- 기능 버튼/드롭다운을 하단으로 이동 --- */}
-        <div className="flex flex-col md:flex-row md:items-center gap-2 mt-4">
-          <div className="flex gap-2">
-            <select
-              value={chartType}
-              onChange={e => onChartTypeChange(e.target.value as ChartType)}
-              className="border rounded px-2 py-1 text-xs"
-            >
-              <option value="vertical">세로 비율</option>
-              <option value="horizontal">가로 비율</option>
-              <option value="verticalStacked">세로 전체 누적</option>
-              <option value="horizontalStacked">가로 전체 누적</option>
-              <option value="pie">원형</option>
-              <option value="donut">도넛형</option>
-            </select>
-            <select
-              value={questionType}
-              onChange={e => onQuestionTypeChange(e.target.value as QuestionType)}
-              className="border rounded px-2 py-1 text-xs"
-            >
-              <option value="likert">리커트 척도</option>
-              <option value="multiple">객관식</option>
-              <option value="multiple_select">복수 응답</option>
-              <option value="open">주관식</option>
-              <option value="matrix">행렬형</option>
-            </select>
-          </div>
-          <div className="flex gap-1">
-            <button onClick={() => handleResize('w-')} className="text-xs px-1">◀</button>
-            <button onClick={() => handleResize('w+')} className="text-xs px-1">▶</button>
-            <button onClick={() => handleResize('h-')} className="text-xs px-1">▲</button>
-            <button onClick={() => handleResize('h+')} className="text-xs px-1">▼</button>
-            {onDuplicate && <button onClick={onDuplicate} className="text-xs px-1 text-blue-500">복제</button>}
-            {onDelete && <button onClick={onDelete} className="text-xs px-1 text-red-500">삭제</button>}
-          </div>
-          <button
-            onClick={() => setDataTableOpen(open => !open)}
-            className="text-xs bg-gray-100 text-gray-700 rounded px-2 py-0.5"
-          >
-            {dataTableOpen ? '데이터 테이블 닫기' : '데이터 테이블 열기'}
-          </button>
-        </div>
-        {/* 데이터 테이블 토글 */}
-        {dataTableOpen && (
-          <div className="mt-2 border rounded bg-gray-50 p-2 text-xs">
-            <div className="mb-1 font-semibold">데이터 테이블 (편집 가능)</div>
-            <table className="w-full border text-xs">
-              <thead>
-                <tr className="bg-gray-100">
-                  <th className="p-1">응답 항목</th>
-                  <th className="p-1">비율(%)</th>
-                  <th className="p-1">기타응답</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.map((row, idx) => (
-                  <tr key={row.label}>
-                    <td>
-                      <input
-                        className="border rounded px-1 py-0.5 w-full"
-                        value={row.label}
-                        onChange={e => {
-                          const newData = [...data];
-                          newData[idx] = { ...row, label: e.target.value };
-                          onDataTableEdit(newData);
-                        }}
-                      />
-                    </td>
-                    <td>
-                      <input
-                        className="border rounded px-1 py-0.5 w-16 text-right"
-                        type="number"
-                        min={0}
-                        max={100}
-                        step={0.1}
-                        value={row.value}
-                        onChange={e => {
-                          const newData = [...data];
-                          newData[idx] = { ...row, value: parseFloat(e.target.value) };
-                          onDataTableEdit(newData);
-                        }}
-                      />
-                    </td>
-                    <td className="text-center">
-                      <input
-                        type="checkbox"
-                        checked={!!row.isOther}
-                        onChange={e => {
-                          const newData = [...data];
-                          newData[idx] = { ...row, isOther: e.target.checked };
-                          onDataTableEdit(newData);
-                        }}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    );
   }
 
-  return chartEl;
+  // 모든 차트 타입에서 카드 레이아웃을 반환하도록 통일
+  return (
+    <div className="bg-white border border-gray-300 rounded-lg shadow-lg ring-2 ring-blue-200 p-4" style={{ minHeight: 600 }}>
+      <div className="flex justify-between items-start mb-4">
+        <h3 className="text-lg font-semibold break-words">{matrixTitle || question}</h3>
+        <div className="text-sm text-gray-600">
+          총 응답: {formatNumber(totalResponses)}개
+        </div>
+      </div>
+      {/* 평균 점수 표기 (리커트/행렬형) */}
+      {(questionType === 'likert' || questionType === 'matrix') && avgScore !== null && (
+        <div className="mb-2 text-blue-700 font-bold text-base text-center">
+          평균 점수: {avgScore} / 5점
+        </div>
+      )}
+      {/* 차트 영역 */}
+      <div className="mt-4 flex-1 flex items-center justify-center">
+        <div className="w-full h-[350px] max-w-[420px] mx-auto">
+          {chartEl}
+        </div>
+      </div>
+      {/* --- 기능 버튼/드롭다운을 하단으로 이동 --- */}
+      <div className="flex flex-col md:flex-row md:items-center gap-2 mt-4">
+        <div className="flex gap-2">
+          <select
+            value={chartType}
+            onChange={e => onChartTypeChange(e.target.value as ChartType)}
+            className="border rounded px-2 py-1 text-xs"
+          >
+            <option value="vertical">세로 비율</option>
+            <option value="horizontal">가로 비율</option>
+            <option value="verticalStacked">세로 전체 누적</option>
+            <option value="horizontalStacked">가로 전체 누적</option>
+            <option value="pie">원형</option>
+            <option value="donut">도넛형</option>
+            <option value="verticalMatrix">세로 비율(행렬형)</option>
+            <option value="horizontalMatrix">가로 비율(행렬형)</option>
+          </select>
+          <select
+            value={questionType}
+            onChange={e => onQuestionTypeChange(e.target.value as QuestionType)}
+            className="border rounded px-2 py-1 text-xs"
+          >
+            <option value="likert">리커트 척도</option>
+            <option value="multiple">객관식</option>
+            <option value="multiple_select">복수 응답</option>
+            <option value="open">주관식</option>
+            <option value="matrix">행렬형</option>
+          </select>
+        </div>
+        <div className="flex gap-1">
+          <button onClick={() => handleResize('w-')} className="text-xs px-1">◀</button>
+          <button onClick={() => handleResize('w+')} className="text-xs px-1">▶</button>
+          <button onClick={() => handleResize('h-')} className="text-xs px-1">▲</button>
+          <button onClick={() => handleResize('h+')} className="text-xs px-1">▼</button>
+          {onDuplicate && <button onClick={onDuplicate} className="text-xs px-1 text-blue-500">복제</button>}
+          {onDelete && <button onClick={onDelete} className="text-xs px-1 text-red-500">삭제</button>}
+        </div>
+        <button
+          onClick={() => setDataTableOpen(open => !open)}
+          className="text-xs bg-gray-100 text-gray-700 rounded px-2 py-0.5"
+        >
+          {dataTableOpen ? '데이터 테이블 닫기' : '데이터 테이블 열기'}
+        </button>
+      </div>
+      {/* 데이터 테이블 토글 */}
+      {dataTableOpen && (
+        <div className="mt-2 border rounded bg-gray-50 p-2 text-xs">
+          <div className="mb-1 font-semibold">데이터 테이블 (편집 가능)</div>
+          <table className="w-full border text-xs">
+            <thead>
+              <tr className="bg-gray-100">
+                <th className="p-1">응답 항목</th>
+                <th className="p-1">응답갯수</th>
+                <th className="p-1">비율(%)</th>
+                <th className="p-1">기타응답</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedData.map((row, idx) => (
+                <tr key={row.label}>
+                  <td>
+                    <input
+                      className="border rounded px-1 py-0.5 w-full"
+                      value={row.label}
+                      onChange={e => {
+                        const newData = [...sortedData];
+                        newData[idx] = { ...row, label: e.target.value };
+                        onDataTableEdit(newData);
+                      }}
+                    />
+                  </td>
+                  <td>{formatNumber(row.value)}</td>
+                  <td>{
+                    (questionType === 'likert' || questionType === 'matrix' || questionType === 'open')
+                      ? '-' : `${formatNumber(toPercent(row.value))}%`
+                  }</td>
+                  <td className="text-center">
+                    <input
+                      type="checkbox"
+                      checked={!!row.isOther}
+                      onChange={e => {
+                        const newData = [...sortedData];
+                        newData[idx] = { ...row, isOther: e.target.checked };
+                        onDataTableEdit(newData);
+                      }}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
 };
 
 export default ChartCard; 
