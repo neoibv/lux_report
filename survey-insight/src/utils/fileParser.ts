@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { QuestionType, QuestionTypeValue, Question } from '../types';
 
 export interface SurveyData {
   headers: string[];
@@ -6,17 +7,6 @@ export interface SurveyData {
   rows: any[];
   questionTypes: QuestionType[];
   questionRowIndex: number;
-}
-
-export interface QuestionType {
-  columnIndex: number;
-  type: 'likert' | 'multiple' | 'open' | 'matrix' | 'multiple_select';
-  options?: string[];
-  scale?: 'satisfaction_5' | 'agreement_5';
-  otherResponses?: string[];
-  matrixGroupId?: number;
-  commonPrefix?: string;
-  differences?: string[];
 }
 
 interface LikertScale {
@@ -138,7 +128,10 @@ export const parseFile = async (file: File, questionRowIndex: number = 1): Promi
         const rows = jsonData.slice(questionRowIndex + 1).map(row => 
           row.map((cell: any) => typeof cell === 'string' ? removeHtmlTags(cell) : cell)
         );
-        const questionTypes = analyzeQuestionTypes(questions, rows);
+
+        // 행렬형 그룹 찾기
+        const matrixGroups = findMatrixGroupsByString(questions);
+        const questionTypes = analyzeQuestionTypes(rows, matrixGroups);
 
         resolve({
           headers,
@@ -164,8 +157,8 @@ export const parseFile = async (file: File, questionRowIndex: number = 1): Promi
   });
 };
 
-// 행렬형 문항 그룹을 찾는 함수
-const findMatrixGroups = (questions: string[]): Map<number, { indices: number[], commonPrefix: string }> => {
+// 행렬형 문항 그룹을 찾는 함수 (string[] 기반, 내부용)
+const findMatrixGroupsByString = (questions: string[]): Map<number, { indices: number[], commonPrefix: string }> => {
   const matrixGroups = new Map<number, { indices: number[], commonPrefix: string }>();
   let currentGroupId = 0;
   
@@ -173,12 +166,12 @@ const findMatrixGroups = (questions: string[]): Map<number, { indices: number[],
   const prefixPatterns = new Map<string, number[]>();
   
   questions.forEach((question, index) => {
-    // 문장의 주요 부분(마지막 3단어 제외)을 접두사로 사용
+    // 문장의 주요 부분(마지막 4단어 제외)을 접두사로 사용
     const words = question.split(/\s+/);
-    if (words.length <= 3) return; // 너무 짧은 문항은 제외
+    if (words.length <= 4) return; // 너무 짧은 문항은 제외
     
-    // 마지막 3단어를 제외한 나머지를 접두사로 사용
-    const prefix = words.slice(0, -3).join(' ');
+    // 마지막 4단어를 제외한 나머지를 접두사로 사용
+    const prefix = words.slice(0, -4).join(' ');
     
     if (!prefixPatterns.has(prefix)) {
       prefixPatterns.set(prefix, []);
@@ -186,15 +179,15 @@ const findMatrixGroups = (questions: string[]): Map<number, { indices: number[],
     prefixPatterns.get(prefix)?.push(index);
   });
   
-  // 2개 이상의 문항이 같은 접두사를 가지면 행렬형 그룹으로 인정
+  // 3개 이상의 문항이 같은 접두사를 가지면 행렬형 그룹으로 인정
   prefixPatterns.forEach((indices, prefix) => {
-    if (indices.length >= 2) {
+    if (indices.length >= 3) {
       const groupQuestions = indices.map(i => questions[i]);
       const commonPrefix = findCommonPrefix(groupQuestions);
       
-      // 공통 접두사가 전체 문장의 70% 이상을 차지하는 경우만 행렬형으로 인정
+      // 공통 접두사가 전체 문장의 80% 이상을 차지하는 경우만 행렬형으로 인정
       const avgLength = groupQuestions.reduce((sum, q) => sum + q.length, 0) / groupQuestions.length;
-      if (commonPrefix.length >= avgLength * 0.7) {
+      if (commonPrefix.length >= avgLength * 0.8) {
         matrixGroups.set(currentGroupId, { indices, commonPrefix });
         currentGroupId++;
       }
@@ -234,179 +227,150 @@ const getMatrixDifferences = (questions: string[], commonPrefix: string): string
   });
 };
 
-const analyzeQuestionTypes = (questions: string[], rows: any[]): QuestionType[] => {
-  // 행렬형 그룹 찾기
-  const matrixGroups = findMatrixGroups(questions);
-  
-  return questions.map((question, index) => {
-    const columnData = rows.map(row => row[index]);
-    
-    // 복수 응답 확인
-    let hasMultipleSelect = false;
-    const allOptions = new Set<string>();
+export function analyzeQuestionTypes(rows: any[], matrixGroups: Map<number, { indices: number[], commonPrefix: string }>): QuestionType[] {
+  const questionTypes: QuestionType[] = [];
+  const columnCount = rows[0].length;
 
-    columnData.forEach(value => {
-      if (typeof value !== 'string') return;
-      const trimmedValue = value.trim();
-      if (!trimmedValue) return;
+  // 행렬형 문항 먼저 처리
+  matrixGroups.forEach((group, groupId) => {
+    group.indices.forEach(columnIndex => {
+      const values = rows.map(row => row[columnIndex]).filter(v => v !== undefined && v !== null && v !== '');
+      if (values.length === 0) return;
+      const uniqueValues = [...new Set(values)];
 
-      // '@@'가 두 번 이상 존재하는지 확인
-      const delimiterCount = (trimmedValue.match(/@@/g) || []).length;
-      if (delimiterCount >= 2) {
-        hasMultipleSelect = true;
-        // '@@'로 분리된 각 응답을 옵션으로 추가
-        trimmedValue.split('@@').forEach(option => {
-          const trimmedOption = option.trim();
-          if (trimmedOption) {
-            allOptions.add(trimmedOption);
-          }
-        });
+      // 행렬형 문항의 응답 패턴 분석
+      let likertScaleMatch: LikertScale | null = null;
+      for (const scale of Object.values(LIKERT_SCALES)) {
+        if (uniqueValues.length < 5 || uniqueValues.length > 7) continue;
+        const matchCount = scale.responses.filter(r => uniqueValues.includes(r)).length;
+        if (matchCount / scale.responses.length >= 0.7) {
+          likertScaleMatch = scale;
+          break;
+        }
       }
+
+      // 행렬형 문항 정보 추가
+      questionTypes.push({
+        columnIndex,
+        type: 'matrix',
+        matrixGroupId: groupId,
+        commonPrefix: group.commonPrefix,
+        scale: likertScaleMatch?.id as 'satisfaction_5' | 'agreement_5' | undefined,
+        options: likertScaleMatch?.responses || uniqueValues,
+        otherResponses: uniqueValues.filter(v => !likertScaleMatch?.responses.includes(v)),
+        scoreMap: likertScaleMatch ? Object.fromEntries(
+          uniqueValues.map((resp) => {
+            const idx = likertScaleMatch!.responses.indexOf(resp);
+            return [resp, idx !== -1 ? likertScaleMatch!.scores[idx] : -1];
+          })
+        ) : undefined
+      });
     });
-
-    if (hasMultipleSelect) {
-      return {
-        columnIndex: index,
-        type: 'multiple_select',
-        options: Array.from(allOptions)
-      };
-    }
-
-    // 고유 응답 수집
-    const uniqueValues = new Set<string>();
-    columnData.forEach(value => {
-      if (typeof value === 'string') {
-        const trimmedValue = value.trim();
-        if (trimmedValue) {
-          uniqueValues.add(trimmedValue);
-        }
-      }
-    });
-
-    // 1. 주관식 확인 - 고유 응답이 10개를 초과하면 주관식으로 판단
-    if (uniqueValues.size > 10) {
-      return {
-        columnIndex: index,
-        type: 'open',
-        options: undefined
-      };
-    }
-
-    // 2. 리커트 척도 확인 - 고유 응답이 10개 이하인 경우만 확인
-    if (uniqueValues.size <= 10) {
-      let bestMatchScaleId = null;
-      let highestMatchScore = 0;
-      let otherResponses = new Set<string>();
-
-      for (const scaleId in LIKERT_SCALES) {
-        const scale = LIKERT_SCALES[scaleId];
-        let currentMatchScore = 0;
-        let positiveResponsesFound = 0;
-        let negativeResponsesFound = 0;
-        let intensifierUsedCount = 0;
-
-        columnData.forEach(response => {
-          if (typeof response !== 'string' || !response.trim()) return;
-          
-          const responseStr = response.trim();
-          let responseMatchScore = 0;
-          let foundDirectResponseMatch = false;
-          
-          // 정확한 응답 매칭
-          if (scale.responses.includes(responseStr)) {
-            responseMatchScore += 2;
-            foundDirectResponseMatch = true;
-            const scoreIndex = scale.responses.indexOf(responseStr);
-            if (scale.scores[scoreIndex] > 3) positiveResponsesFound++;
-            else if (scale.scores[scoreIndex] < 3) negativeResponsesFound++;
-          }
-
-          // 키워드 매칭
-          if (!foundDirectResponseMatch) {
-            let tempIntensifierUsed = false;
-            for (const intensifier of scale.intensifiers) {
-              if (responseStr.includes(intensifier)) {
-                tempIntensifierUsed = true;
-                for (const pk of scale.positive_keywords) {
-                  if (responseStr.includes(pk) && (responseStr.startsWith(intensifier) || responseStr.endsWith(pk))) {
-                    responseMatchScore += 1.5;
-                    positiveResponsesFound++;
-                    break;
-                  }
-                }
-                if (responseMatchScore > 0 && tempIntensifierUsed) break;
-
-                for (const nk of scale.negative_keywords) {
-                  if (responseStr.includes(nk) && (responseStr.startsWith(intensifier) || responseStr.endsWith(nk))) {
-                    responseMatchScore += 1.5;
-                    negativeResponsesFound++;
-                    break;
-                  }
-                }
-                if (responseMatchScore > 0 && tempIntensifierUsed) break;
-              }
-            }
-            if (tempIntensifierUsed) intensifierUsedCount++;
-          }
-
-          currentMatchScore += responseMatchScore;
-        });
-
-        // 긍정적/부정적 응답이 모두 있는 경우에만 점수 계산
-        if (positiveResponsesFound > 0 && negativeResponsesFound > 0) {
-          const matchRatio = uniqueValues.size > 0 ? currentMatchScore / (uniqueValues.size * 2) : 0;
-          const responseCountSimilarity = scale.responses.length > 0 ? 1 - (Math.abs(uniqueValues.size - scale.responses.length) / scale.responses.length) : 0;
-          const intensifierBonus = (intensifierUsedCount / uniqueValues.size) * 0.2;
-          const finalScore = matchRatio * 0.6 + responseCountSimilarity * 0.2 + intensifierBonus;
-
-          if (finalScore > highestMatchScore && finalScore > 0.4) {
-            highestMatchScore = finalScore;
-            bestMatchScaleId = scaleId;
-          }
-        }
-      }
-
-      // 리커트 척도로 판단되는 경우
-      if (bestMatchScaleId) {
-        // 기타응답 분리
-        const matchedLikertResponses = new Set(LIKERT_SCALES[bestMatchScaleId].responses);
-        const otherResponsesArr = Array.from(uniqueValues).filter(
-          v => !matchedLikertResponses.has(v)
-        );
-
-        // 행렬형 그룹에 속하는지 확인
-        for (const [groupId, groupInfo] of matrixGroups.entries()) {
-          if (groupInfo.indices.includes(index)) {
-            const groupQuestions = groupInfo.indices.map(i => questions[i]);
-            const differences = getMatrixDifferences(groupQuestions, groupInfo.commonPrefix);
-            return {
-              columnIndex: index,
-              type: 'matrix',
-              scale: bestMatchScaleId as 'satisfaction_5' | 'agreement_5',
-              options: LIKERT_SCALES[bestMatchScaleId].responses,
-              otherResponses: otherResponsesArr,
-              matrixGroupId: groupId,
-              commonPrefix: groupInfo.commonPrefix,
-              differences: differences
-            };
-          }
-        }
-
-        return {
-          columnIndex: index,
-          type: 'likert',
-          scale: bestMatchScaleId as 'satisfaction_5' | 'agreement_5',
-          options: LIKERT_SCALES[bestMatchScaleId].responses,
-          otherResponses: otherResponsesArr
-        };
-      }
-    }
-
-    // 3. 기본값은 객관식
-    return {
-      columnIndex: index,
-      type: 'multiple',
-      options: Array.from(uniqueValues) as string[]
-    };
   });
+
+  // 나머지 문항 처리
+  for (let i = 0; i < columnCount; i++) {
+    // 이미 행렬형으로 처리된 문항은 건너뛰기
+    if (questionTypes.some(qt => qt.columnIndex === i)) continue;
+
+    const values = rows.map(row => row[i]).filter(v => v !== undefined && v !== null && v !== '');
+    if (values.length === 0) continue;
+    const uniqueValues = [...new Set(values)];
+
+    // 1. 복수응답: @@ 구분자 포함 비율이 30% 이상이면 복수응답
+    const multiSelectRatio = values.filter(v => typeof v === 'string' && v.includes('@@')).length / values.length;
+    if (multiSelectRatio >= 0.3) {
+      // 보기 목록 추출
+      const optionsSet = new Set<string>();
+      values.forEach(v => {
+        if (typeof v === 'string') {
+          v.split('@@').forEach(opt => optionsSet.add(opt.trim()));
+        }
+      });
+      questionTypes.push({
+        columnIndex: i,
+        type: 'multiple_select',
+        options: Array.from(optionsSet)
+      });
+      continue;
+    }
+
+    // 2. 주관식: 고유 응답 10개 이상
+    if (uniqueValues.length >= 10) {
+      questionTypes.push({
+        columnIndex: i,
+        type: 'open'
+      });
+      continue;
+    }
+
+    // 3. 리커트 감지: 응답 개수 5~7개, 표준 응답 70% 이상 일치
+    let likertScaleMatch: LikertScale | null = null;
+    for (const scale of Object.values(LIKERT_SCALES)) {
+      if (uniqueValues.length < 5 || uniqueValues.length > 7) continue;
+      const matchCount = scale.responses.filter(r => uniqueValues.includes(r)).length;
+      if (matchCount / scale.responses.length >= 0.7) {
+        likertScaleMatch = scale;
+        break;
+      }
+    }
+    if (likertScaleMatch) {
+      // 기타응답 분리
+      const otherResponses = uniqueValues.filter(v => !likertScaleMatch!.responses.includes(v));
+      // scoreMap 생성
+      const scoreMap = Object.fromEntries(
+        uniqueValues.map((resp) => {
+          const idx = likertScaleMatch!.responses.indexOf(resp);
+          return [resp, idx !== -1 ? likertScaleMatch!.scores[idx] : -1];
+        })
+      );
+      questionTypes.push({
+        columnIndex: i,
+        type: 'likert',
+        scale: likertScaleMatch.id as 'satisfaction_5' | 'agreement_5',
+        options: likertScaleMatch.responses,
+        otherResponses,
+        scoreMap
+      });
+      continue;
+    }
+
+    // 4. 객관식: 응답 2~6개, 리커트와 무관
+    if (uniqueValues.length >= 2 && uniqueValues.length <= 6) {
+      questionTypes.push({
+        columnIndex: i,
+        type: 'multiple',
+        options: uniqueValues
+      });
+      continue;
+    }
+
+    // 5. 기본값: 주관식
+    questionTypes.push({
+      columnIndex: i,
+      type: 'open'
+    });
+  }
+
+  return questionTypes;
+}
+
+// 행렬형 문항 그룹을 찾는 함수 (Question[] 기반, export)
+export const findMatrixGroups = (questions: Question[]): { id: string; title: string; questions: Question[] }[] => {
+  const groups = new Map<string, { id: string; title: string; questions: Question[] }>();
+  
+  questions.forEach(question => {
+    if (question.matrixGroupId) {
+      if (!groups.has(question.matrixGroupId)) {
+        groups.set(question.matrixGroupId, {
+          id: question.matrixGroupId,
+          title: question.matrixTitle || question.matrixGroupId,
+          questions: []
+        });
+      }
+      groups.get(question.matrixGroupId)?.questions.push(question);
+    }
+  });
+  
+  return Array.from(groups.values());
 }; 

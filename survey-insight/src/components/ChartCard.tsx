@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -8,24 +8,26 @@ import {
   Tooltip,
   Legend,
   Title,
+  ChartOptions,
+  ChartData,
 } from 'chart.js';
 import { Bar, Pie, Doughnut } from 'react-chartjs-2';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
-import { ChartType, QuestionType } from '../types';
+import { ChartType, QuestionTypeValue, Response } from '../types';
 
 interface ChartCardProps {
-  questionIndex: number | string;
+  questionIndex: string;
   question: string;
-  questionType: QuestionType;
+  questionType: QuestionTypeValue;
   chartType: ChartType;
-  data: { label: string; value: number; isOther?: boolean }[];
-  onChartTypeChange: (chartType: ChartType) => void;
-  onQuestionTypeChange: (questionType: QuestionType) => void;
-  onDataTableEdit: (data: any[]) => void;
+  data: Response[];
+  onChartTypeChange: (type: ChartType) => void;
+  onQuestionTypeChange: (type: QuestionTypeValue) => void;
+  onDataTableEdit: (data: Response[]) => void;
   gridSize: { w: number; h: number };
   onGridSizeChange: (size: { w: number; h: number }) => void;
-  onDuplicate?: () => void;
-  onDelete?: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
   colors?: string[];
   respondentCount?: number;
   matrixTitle?: string;
@@ -95,6 +97,211 @@ const ChartCard: React.FC<ChartCardProps> = ({
   scores
 }) => {
   const [dataTableOpen, setDataTableOpen] = useState(false);
+  const chartRef = useRef<any>(null);
+
+  // 차트 데이터 메모이제이션
+  const chartData = useMemo(() => {
+    const sortedData = [
+      ...data.filter(d => !d.isOther),
+      ...data.filter(d => d.isOther)
+    ];
+    const labels = sortedData.map(d => d.label);
+    const values = sortedData.map(d => d.value);
+    const backgroundColors = colors
+      ? colors.slice(0, sortedData.length)
+      : (questionType === 'likert' || questionType === 'matrix')
+        ? sortedData.map((d, i) => d.isOther ? '#E0E0E0' : likertColors[i % likertColors.length])
+        : sortedData.map((d, i) => d.isOther ? '#E0E0E0' : generateColorSet(sortedData.length)[i]);
+
+    return {
+      labels,
+      values,
+      backgroundColors,
+      sortedData
+    };
+  }, [data, colors, questionType]);
+
+  // 차트 옵션 메모이제이션
+  const chartOptions = useMemo(() => {
+    const isMatrixChart = chartType === 'verticalMatrix' || chartType === 'horizontalMatrix';
+    const baseOptions: ChartOptions<'bar' | 'pie' | 'doughnut'> = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { 
+          display: chartType === 'pie' || chartType === 'donut',
+          position: 'bottom',
+          labels: {
+            boxWidth: 12,
+            padding: 15
+          }
+        },
+        tooltip: { 
+          enabled: true,
+          padding: 10,
+          backgroundColor: 'rgba(0, 0, 0, 0.8)'
+        },
+        title: { display: false },
+        datalabels: {
+          display: true,
+          color: '#000',
+          font: {
+            weight: 'bold' as const
+          },
+          anchor: 'end',
+          align: 'top',
+          formatter: (value: number) => {
+            if (value === undefined || value === null) return '';
+            return isMatrixChart ? formatNumber(value) : `${formatNumber(value)}%`;
+          }
+        }
+      }
+    };
+
+    if (chartType === 'vertical' || chartType === 'horizontal') {
+      return {
+        ...baseOptions,
+        indexAxis: chartType === 'vertical' ? 'x' as const : 'y' as const,
+        scales: chartType === 'vertical'
+          ? {
+              x: {
+                grid: {
+                  display: true,
+                  drawOnChartArea: true,
+                  color: '#e5e7eb',
+                },
+                ticks: {
+                  callback: (v: any, idx: number) => ellipsisLabel(chartData.labels[idx], 10),
+                  maxRotation: 45,
+                  minRotation: 0,
+                  autoSkip: false,
+                },
+              },
+              y: { beginAtZero: true, max: 100, ticks: { callback: (v: any) => `${v}%` } },
+            }
+          : {
+              x: { beginAtZero: true, max: 100, ticks: { callback: (v: any) => `${v}%` } },
+              y: {
+                grid: {
+                  display: true,
+                  drawOnChartArea: true,
+                  color: '#e5e7eb',
+                },
+                ticks: {
+                  callback: (v: any, idx: number) => ellipsisLabel(chartData.labels[idx], 10),
+                  maxRotation: 45,
+                  minRotation: 0,
+                  autoSkip: false,
+                },
+              },
+            },
+      };
+    }
+
+    if (chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') {
+      return {
+        ...baseOptions,
+        indexAxis: chartType === 'verticalMatrix' ? 'x' as const : 'y' as const,
+        scales: chartType === 'verticalMatrix'
+          ? {
+              x: { grid: { display: false } },
+              y: {
+                beginAtZero: true,
+                min: 0,
+                max: 5,
+                ticks: { stepSize: 1, callback: (v: any) => v },
+              },
+            }
+          : {
+              x: {
+                beginAtZero: true,
+                min: 0,
+                max: 5,
+                ticks: { stepSize: 1, callback: (v: any) => v },
+              },
+              y: { grid: { display: false } },
+            },
+      };
+    }
+
+    return baseOptions;
+  }, [chartType, chartData.labels]);
+
+  // 차트 데이터 메모이제이션
+  const chartDataConfig = useMemo(() => {
+    const isMatrixChart = chartType === 'verticalMatrix' || chartType === 'horizontalMatrix';
+    return {
+      labels: chartData.labels,
+      datasets: [{
+        data: chartData.values,
+        backgroundColor: chartData.backgroundColors,
+        borderRadius: 0,
+        barPercentage: 0.75,
+        categoryPercentage: 0.85,
+      }]
+    };
+  }, [chartType, chartData]);
+
+  // 차트 컴포넌트 렌더링
+  const renderChart = () => {
+    if (chartType === 'vertical' || chartType === 'horizontal') {
+      return (
+        <Bar
+          ref={chartRef}
+          data={chartDataConfig}
+          options={chartOptions as ChartOptions<'bar'>}
+        />
+      );
+    }
+    
+    if (chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') {
+      return (
+        <Bar
+          ref={chartRef}
+          data={chartDataConfig}
+          options={chartOptions as ChartOptions<'bar'>}
+        />
+      );
+    }
+
+    if (chartType === 'pie') {
+      return (
+        <Pie
+          ref={chartRef}
+          data={chartDataConfig}
+          options={chartOptions as ChartOptions<'pie'>}
+        />
+      );
+    }
+
+    if (chartType === 'donut') {
+      return (
+        <Doughnut
+          ref={chartRef}
+          data={chartDataConfig}
+          options={chartOptions as ChartOptions<'doughnut'>}
+        />
+      );
+    }
+
+    return null;
+  };
+
+  // 차트 인스턴스 정리
+  useEffect(() => {
+    return () => {
+      if (chartRef.current) {
+        chartRef.current.destroy();
+      }
+    };
+  }, []);
+
+  // 차트 타입이나 데이터가 변경될 때 차트 업데이트
+  useEffect(() => {
+    if (chartRef.current) {
+      chartRef.current.destroy();
+    }
+  }, [chartType, data, questionType]);
 
   // 실제 응답 인원수: props로 받거나, 없으면 value 합의 반올림(Math.round)
   const totalResponses = respondentCount !== undefined ? respondentCount : Math.round(data.reduce((sum, item) => sum + item.value, 0));
@@ -111,29 +318,6 @@ const ChartCard: React.FC<ChartCardProps> = ({
       return Math.round((val / totalResponses) * 1000) / 10;
     }
   }
-
-  // 기타응답을 마지막으로 정렬
-  const sortedData = [
-    ...data.filter(d => !d.isOther),
-    ...data.filter(d => d.isOther)
-  ];
-
-  const labels = sortedData.map(d => d.label);
-
-  // 색상 처리: 기타응답은 무조건 회색, 나머지는 기존 방식
-  const backgroundColors = colors
-    ? colors.slice(0, sortedData.length)
-    : (questionType === 'likert' || questionType === 'matrix')
-      ? sortedData.map((d, i) => d.isOther ? '#E0E0E0' : likertColors[i % likertColors.length])
-      : sortedData.map((d, i) => d.isOther ? '#E0E0E0' : generateColorSet(sortedData.length)[i]);
-
-  // 카드 크기 조절 예시 (좌/우/상/하 버튼)
-  const handleResize = (dir: 'w+' | 'w-' | 'h+' | 'h-') => {
-    if (dir === 'w+') onGridSizeChange({ ...gridSize, w: gridSize.w + 1 });
-    if (dir === 'w-' && gridSize.w > 1) onGridSizeChange({ ...gridSize, w: gridSize.w - 1 });
-    if (dir === 'h+') onGridSizeChange({ ...gridSize, h: gridSize.h + 1 });
-    if (dir === 'h-' && gridSize.h > 1) onGridSizeChange({ ...gridSize, h: gridSize.h - 1 });
-  };
 
   // 리커트/행렬형 평균 계산 (기타응답 제외)
   let avgScore: number | null = null;
@@ -175,289 +359,9 @@ const ChartCard: React.FC<ChartCardProps> = ({
 
   // 차트 데이터 변환 (백분율 or 점수)
   const isMatrixChart = chartType === 'verticalMatrix' || chartType === 'horizontalMatrix';
-  const chartValues = isMatrixChart ? sortedData.map(d => d.value) : sortedData.map(d => toPercent(d.value));
+  const chartValues = isMatrixChart ? chartData.values : chartData.values.map(d => toPercent(d));
 
-  // 공통 차트 옵션
-  const commonOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { 
-        display: chartType === 'pie' || chartType === 'donut',
-        position: 'bottom',
-        labels: {
-          boxWidth: 12,
-          padding: 15
-        }
-      },
-      tooltip: { 
-        enabled: true,
-        padding: 10,
-        backgroundColor: 'rgba(0, 0, 0, 0.8)'
-      },
-      title: { display: false },
-      // @ts-ignore
-      datalabels: {
-        display: true,
-        color: '#000000',
-        font: { 
-          weight: 'bold',
-          size: 11
-        },
-        formatter: (value: number) => `${value}%`,
-        padding: 6,
-        borderRadius: 4,
-        backgroundColor: 'rgba(255, 255, 255, 0.7)'
-      },
-    },
-  };
-
-  // 차트별 데이터/옵션
-  let chartEl = null;
-  if (chartType === 'vertical' || chartType === 'horizontal') {
-    const isLikert = questionType === 'likert' || questionType === 'matrix';
-    chartEl = (
-      <Bar
-        data={{
-          labels,
-          datasets: [
-            {
-              data: chartValues,
-              backgroundColor: backgroundColors,
-              borderRadius: 0, // 각진 모서리
-              barPercentage: 0.75, // 막대 두께 조정
-              categoryPercentage: 0.85, // 막대 두께 조정
-            },
-          ],
-        }}
-        options={{
-          ...commonOptions,
-          indexAxis: chartType === 'vertical' ? 'x' : 'y',
-          plugins: {
-            ...commonOptions.plugins,
-            tooltip: {
-              ...commonOptions.plugins.tooltip,
-              callbacks: {
-                title: (tooltipItems: any) => {
-                  const idx = tooltipItems[0].dataIndex;
-                  return labels[idx]; // 전체 문항 텍스트
-                }
-              }
-            },
-            // @ts-ignore
-            datalabels: {
-              ...commonOptions.plugins.datalabels,
-              anchor: 'end',
-              align: 'top',
-              formatter: (value: number) => `${formatNumber(value)}%`,
-            }
-          },
-          scales: chartType === 'vertical'
-            ? {
-                x: {
-                  grid: {
-                    display: true, // 세로선 표시
-                    drawOnChartArea: true,
-                    color: '#e5e7eb', // 연한 회색
-                  },
-                  ticks: {
-                    callback: (v: any, idx: number) => ellipsisLabel(labels[idx], 10),
-                    maxRotation: 45,
-                    minRotation: 0,
-                    autoSkip: false,
-                  },
-                },
-                y: { beginAtZero: true, max: 100, ticks: { callback: (v: any) => `${v}%` } },
-              }
-            : {
-                x: { beginAtZero: true, max: 100, ticks: { callback: (v: any) => `${v}%` } },
-                y: {
-                  grid: {
-                    display: true, // 가로선 표시
-                    drawOnChartArea: true,
-                    color: '#e5e7eb',
-                  },
-                  ticks: {
-                    callback: (v: any, idx: number) => ellipsisLabel(labels[idx], 10),
-                    maxRotation: 45,
-                    minRotation: 0,
-                    autoSkip: false,
-                  },
-                },
-              },
-        }}
-      />
-    );
-  } else if (chartType === 'verticalStacked' || chartType === 'horizontalStacked') {
-    const isLikert = questionType === 'likert' || questionType === 'matrix';
-    chartEl = (
-      <Bar
-        data={{
-          labels: labels,
-          datasets: labels.map((label, index) => ({
-            data: [chartValues[index]],
-            label: label,
-            backgroundColor: backgroundColors[index],
-            stack: 'stack1',
-            borderRadius: 0,
-          })),
-        }}
-        options={{
-          ...commonOptions,
-          indexAxis: chartType === 'verticalStacked' ? 'x' : 'y',
-          plugins: {
-            ...commonOptions.plugins,
-            // @ts-ignore
-            datalabels: {
-              ...commonOptions.plugins.datalabels,
-              anchor: 'end',
-              align: 'end',
-              formatter: (value: number) => value > 5 ? `${formatNumber(value)}%` : '',
-            }
-          },
-          scales: chartType === 'verticalStacked'
-            ? {
-                x: { stacked: true, grid: { display: false } },
-                y: { 
-                  stacked: true, 
-                  beginAtZero: true, 
-                  max: 100, 
-                  ticks: { 
-                    callback: (v: any) => `${v}%`,
-                    font: { size: 11 }
-                  } 
-                },
-              }
-            : {
-                x: { 
-                  stacked: true, 
-                  beginAtZero: true, 
-                  max: 100, 
-                  ticks: { 
-                    callback: (v: any) => `${v}%`,
-                    font: { size: 11 }
-                  } 
-                },
-                y: { 
-                  stacked: true, 
-                  grid: { display: false },
-                  ticks: { font: { size: 11 } }
-                },
-              },
-        }}
-      />
-    );
-  } else if (chartType === 'pie') {
-    chartEl = (
-      <Pie
-        data={{
-          labels,
-          datasets: [
-            {
-              data: chartValues,
-              backgroundColor: backgroundColors,
-            },
-          ],
-        }}
-        // @ts-ignore
-        options={{
-          ...commonOptions,
-          plugins: {
-            ...commonOptions.plugins,
-            // @ts-ignore
-            datalabels: {
-              ...commonOptions.plugins.datalabels,
-              formatter: (value: number) => `${formatNumber(value)}%`,
-            }
-          }
-        }}
-      />
-    );
-  } else if (chartType === 'donut') {
-    chartEl = (
-      <Doughnut
-        data={{
-          labels,
-          datasets: [
-            {
-              data: chartValues,
-              backgroundColor: backgroundColors,
-            },
-          ],
-        }}
-        // @ts-ignore
-        options={{
-          ...commonOptions,
-          plugins: {
-            ...commonOptions.plugins,
-            // @ts-ignore
-            datalabels: {
-              ...commonOptions.plugins.datalabels,
-              formatter: (value: number) => `${formatNumber(value)}%`,
-            }
-          }
-        }}
-      />
-    );
-  } else if (chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') {
-    const matrixLabels = sortedData.map(d => d.label);
-    const matrixValues = sortedData.map(d => d.value);
-    // 총 응답: 각 문항별 응답 개수(동일하다고 가정, 첫 문항 기준)
-    const matrixRespondentCount = respondentCount !== undefined ? respondentCount : undefined;
-    chartEl = (
-      <Bar
-        data={{
-          labels: matrixLabels,
-          datasets: [
-            {
-              data: matrixValues,
-              backgroundColor: colors ? colors.slice(0, sortedData.length) : palette.slice(0, sortedData.length),
-              borderRadius: 0,
-            },
-          ],
-        }}
-        options={{
-          responsive: true,
-          plugins: {
-            legend: { display: false },
-            tooltip: { enabled: true },
-            title: { display: false },
-            // @ts-ignore
-            datalabels: {
-              display: true,
-              color: '#000',
-              font: { weight: 'bold' },
-              anchor: 'end',
-              align: 'top',
-              formatter: (value: number) => value.toFixed(2),
-            },
-          },
-          indexAxis: chartType === 'verticalMatrix' ? 'x' : 'y',
-          scales: chartType === 'verticalMatrix'
-            ? {
-                x: { grid: { display: false } },
-                y: {
-                  beginAtZero: true,
-                  min: 0,
-                  max: 5,
-                  ticks: { stepSize: 1, callback: (v: any) => v },
-                },
-              }
-            : {
-                x: {
-                  beginAtZero: true,
-                  min: 0,
-                  max: 5,
-                  ticks: { stepSize: 1, callback: (v: any) => v },
-                },
-                y: { grid: { display: false } },
-              },
-        }}
-      />
-    );
-  }
-
-  const chartMaxWidth = sortedData.length >= 7 ? 'max-w-[600px]' : 'max-w-[420px]';
+  const chartMaxWidth = chartData.labels.length >= 7 ? 'max-w-[600px]' : 'max-w-[420px]';
 
   // 모든 차트 타입에서 카드 레이아웃을 반환하도록 통일
   return (
@@ -485,7 +389,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
       {/* 차트 영역 */}
       <div className="mt-4 flex-1 flex items-center justify-center">
         <div className={`w-full h-[350px] mx-auto ${chartMaxWidth}`}>
-          {chartEl}
+          {renderChart()}
         </div>
       </div>
       {/* --- 옵션/버튼 영역: 항상 카드 하단에 --- */}
@@ -507,21 +411,21 @@ const ChartCard: React.FC<ChartCardProps> = ({
           </select>
           <select
             value={questionType}
-            onChange={e => onQuestionTypeChange(e.target.value as QuestionType)}
+            onChange={e => onQuestionTypeChange(e.target.value as QuestionTypeValue)}
             className="border rounded px-2 py-1 text-xs"
           >
             <option value="likert">리커트 척도</option>
             <option value="multiple">객관식</option>
-            <option value="multiple_select">복수 응답</option>
+            <option value="multiple_select">복수응답</option>
             <option value="open">주관식</option>
             <option value="matrix">행렬형</option>
           </select>
         </div>
         <div className="flex gap-1">
-          <button onClick={() => handleResize('w-')} className="text-xs px-1">◀</button>
-          <button onClick={() => handleResize('w+')} className="text-xs px-1">▶</button>
-          <button onClick={() => handleResize('h-')} className="text-xs px-1">▲</button>
-          <button onClick={() => handleResize('h+')} className="text-xs px-1">▼</button>
+          <button onClick={() => onGridSizeChange({ ...gridSize, w: gridSize.w - 1 })} className="text-xs px-1">◀</button>
+          <button onClick={() => onGridSizeChange({ ...gridSize, w: gridSize.w + 1 })} className="text-xs px-1">▶</button>
+          <button onClick={() => onGridSizeChange({ ...gridSize, h: gridSize.h - 1 })} className="text-xs px-1">▲</button>
+          <button onClick={() => onGridSizeChange({ ...gridSize, h: gridSize.h + 1 })} className="text-xs px-1">▼</button>
           {onDuplicate && <button onClick={onDuplicate} className="text-xs px-1 text-blue-500">복제</button>}
           {onDelete && <button onClick={onDelete} className="text-xs px-1 text-red-500">삭제</button>}
         </div>
@@ -546,14 +450,14 @@ const ChartCard: React.FC<ChartCardProps> = ({
               </tr>
             </thead>
             <tbody>
-              {sortedData.map((row, idx) => (
+              {chartData.sortedData.map((row, idx) => (
                 <tr key={row.label}>
                   <td>
                     <input
                       className="border rounded px-1 py-0.5 w-full"
                       value={row.label}
                       onChange={e => {
-                        const newData = [...sortedData];
+                        const newData = [...chartData.sortedData];
                         newData[idx] = { ...row, label: e.target.value };
                         onDataTableEdit(newData);
                       }}
@@ -569,7 +473,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
                       type="checkbox"
                       checked={!!row.isOther}
                       onChange={e => {
-                        const newData = [...sortedData];
+                        const newData = [...chartData.sortedData];
                         newData[idx] = { ...row, isOther: e.target.checked };
                         onDataTableEdit(newData);
                       }}

@@ -8,4 +8,5 @@ export interface QuestionType {
   commonPrefix?: string;
   differences?: string[];
   responseOrder?: string[];
+  scoreMap?: { [key: string]: number };
 } 

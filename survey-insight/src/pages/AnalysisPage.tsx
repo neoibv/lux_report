@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import useSurveyStore from '../store/surveyStore';
 import ChartCard from '../components/ChartCard';
 import { LIKERT_SCALES, LikertScale } from '../utils/likertScales';
-import { ChartType, QuestionType } from '../types';
+import { ChartType, QuestionType, QuestionTypeValue } from '../types';
 
 // 복수응답 문항의 '_Others'를 '기타'로 묶어 카운팅하는 분석용 데이터 생성 함수
 function getProcessedRows(surveyData: any) {
@@ -57,18 +57,20 @@ const typeColors = {
   multiple_select: 'text-orange-800'
 };
 
-// 2. 공통 prefix 직접 추출 함수(블록 밖으로 이동)
-function findCommonPrefix(strings: string[]) {
-  if (!strings.length) return '';
-  let prefix = strings[0];
-  for (let i = 1; i < strings.length; i++) {
-    while (strings[i].indexOf(prefix) !== 0) {
-      prefix = prefix.slice(0, -1);
-      if (!prefix) return '';
+// 공통 prefix 찾기
+const findCommonPrefix = (strings: string[]) => {
+  if (strings.length === 0) return '';
+  const first = strings[0];
+  let prefix = '';
+  for (let i = 0; i < first.length; i++) {
+    if (strings.every(s => s[i] === first[i])) {
+      prefix += first[i];
+    } else {
+      break;
     }
   }
-  return prefix.trim();
-}
+  return prefix;
+};
 
 const AnalysisPage: React.FC = () => {
   const navigate = useNavigate();
@@ -100,15 +102,16 @@ const AnalysisPage: React.FC = () => {
   const processedRows = getProcessedRows(surveyData);
 
   // 문항 필터링(검색)
-  const filteredQuestions = surveyData.questionTypes.filter((qt: any) => {
-    const qText = surveyData.questions[qt.columnIndex] || '';
+  const filteredQuestions = surveyData.questionTypes?.filter((qt: any) => {
+    const qText = surveyData.questions[qt.columnIndex]?.text || '';
     return qText.toLowerCase().includes(search.toLowerCase());
-  });
+  }) || [];
 
   // 유형별로 그룹핑
-  const groupedQuestions = filteredQuestions.reduce((acc: any, qt: any) => {
-    if (!acc[qt.type]) acc[qt.type] = [];
-    acc[qt.type].push(qt);
+  const groupedQuestions = filteredQuestions.reduce((acc: Record<string, any[]>, qt: any) => {
+    const type = qt.type || 'multiple';
+    if (!acc[type]) acc[type] = [];
+    acc[type].push(qt);
     return acc;
   }, {});
 
@@ -121,7 +124,7 @@ const AnalysisPage: React.FC = () => {
     
     // matrixGroupId별로 그룹핑
     const matrixGroups: Record<number, any[]> = {};
-    surveyData.questionTypes.forEach((qt: any) => {
+    surveyData.questionTypes?.forEach((qt: any) => {
       if (qt.type === 'matrix' && qt.matrixGroupId !== undefined) {
         if (!matrixGroups[qt.matrixGroupId]) matrixGroups[qt.matrixGroupId] = [];
         matrixGroups[qt.matrixGroupId].push(qt);
@@ -132,7 +135,7 @@ const AnalysisPage: React.FC = () => {
     const usedMatrixGroups = new Set<number>();
 
     selectedQuestions.forEach(qIdx => {
-      const qt = surveyData.questionTypes.find((qt: any) => qt.columnIndex === qIdx);
+      const qt = surveyData.questionTypes?.find((qt: any) => qt.columnIndex === qIdx);
       // [검증4] 차트 생성 시 해당 문항 데이터 로그
       console.log('[검증4] 차트 생성 시 해당 문항 데이터:', qt);
       if (!qt) return;
@@ -142,7 +145,7 @@ const AnalysisPage: React.FC = () => {
         usedMatrixGroups.add(qt.matrixGroupId);
         const groupQs = matrixGroups[qt.matrixGroupId];
         // 1. groupQs의 전체 질문 텍스트 배열
-        const questionTexts = groupQs.map((q: any) => surveyData.questions[q.columnIndex] || '');
+        const questionTexts = groupQs.map((q: any) => surveyData.questions[q.columnIndex]?.text || '');
         // 2. 공통 prefix 직접 추출
         const commonPrefix = findCommonPrefix(questionTexts);
         // 3. diff(뒷부분) 추출 (fallback 개선)
@@ -153,7 +156,7 @@ const AnalysisPage: React.FC = () => {
         });
         // 각 문항별 평균점수 계산 및 디버깅
         const data = groupQs.map((mq: any, idx: number) => {
-          const allValues = processedRows.map((row: any[]) => row[mq.columnIndex]).filter((v: any) => typeof v === 'string' && v.trim() !== '');
+          const allValues = processedRows.map((row: any[]) => row[mq.columnIndex]).filter((v: any) => typeof v === 'string' && v.trim() !== '') as string[];
           // 1. scoreMap이 있으면 그걸 우선 사용
           const scoreMap = mq.scoreMap;
           let sum = 0, cnt = 0;
@@ -164,6 +167,17 @@ const AnalysisPage: React.FC = () => {
                 sum += score;
                 cnt++;
               }
+            });
+          } else if (mq.scale && LIKERT_SCALES[mq.scale]) {
+            // scale이 명확히 지정된 경우 해당 리커트 유형의 responses/scores를 사용
+            const scaleObj = LIKERT_SCALES[mq.scale];
+            allValues.forEach((v: string) => {
+              const idx = scaleObj.responses.indexOf(v);
+              if (idx !== -1) {
+                sum += scaleObj.scores[idx];
+                cnt++;
+              }
+              // 매칭되지 않는 값은 평균에서 제외(기타응답)
             });
           } else {
             // 2. responseOrder와 scores가 있으면 그것을 사용
@@ -183,10 +197,24 @@ const AnalysisPage: React.FC = () => {
               const scale = LIKERT_SCALES.find(s => s.responses.every(r => mq.options?.includes(r)));
               if (scale) {
                 allValues.forEach((v: string) => {
-                  const sidx = scale.responses.indexOf(v);
-                  if (sidx !== -1) {
-                    sum += scale.scores[sidx];
-                    cnt++;
+                  // 숫자형 응답 처리 (예: "5 (매우 만족)")
+                  const numericMatch = v.match(/^(\d+)\s*\(([^)]+)\)$/);
+                  if (numericMatch) {
+                    const [_, num, desc] = numericMatch;
+                    const matchingResponse = scale.responses.find(r => r.includes(desc.trim()));
+                    if (matchingResponse) {
+                      const scoreIndex = scale.responses.indexOf(matchingResponse);
+                      if (scoreIndex !== -1) {
+                        sum += scale.scores[scoreIndex];
+                        cnt++;
+                      }
+                    }
+                  } else {
+                    const scoreIndex = scale.responses.indexOf(v);
+                    if (scoreIndex !== -1) {
+                      sum += scale.scores[scoreIndex];
+                      cnt++;
+                    }
                   }
                 });
               }
@@ -194,7 +222,7 @@ const AnalysisPage: React.FC = () => {
               if (cnt === 0 && allValues.length > 0) {
                 allValues.forEach((v: string) => {
                   const num = parseFloat(v.replace(/[^0-9.]/g, ''));
-                  if (!isNaN(num)) {
+                  if (!isNaN(num) && num >= 1 && num <= 5) {
                     sum += num;
                     cnt++;
                   }
@@ -202,10 +230,10 @@ const AnalysisPage: React.FC = () => {
               }
             }
           }
-          const avg = cnt > 0 ? Math.round((sum / cnt) * 100) / 100 : 0;
-          // 디버깅용 콘솔
-          console.log(`[matrix] 문항 diff:`, diffs[idx], '응답수:', allValues.length, '평균:', avg);
-          return { label: diffs[idx] || '', value: avg };
+          return {
+            ...mq,
+            averageScore: cnt > 0 ? sum / cnt : 0
+          };
         });
         // matrixRespondentCount: 첫 문항의 응답자 수
         const matrixRespondentCount = groupQs.length > 0
@@ -217,7 +245,7 @@ const AnalysisPage: React.FC = () => {
         // diff가 모두 60자 이상(설명문)인 경우 차트 생성하지 않음(단, 응답 데이터가 없을 때만)
         const isAllDiffLong = diffs.every(d => d.length >= 60);
         // 모든 value가 0이거나 응답 데이터가 없고, diff가 모두 설명문(60자 이상)일 때만 차트 생성하지 않음
-        if ((data.every(d => d.value === 0) || matrixRespondentCount === 0) && isAllDiffLong) {
+        if ((data.every(d => d.averageScore === 0) || matrixRespondentCount === 0) && isAllDiffLong) {
           console.warn(`[matrix] 차트 생성 제외: 응답 데이터 없음 + diff가 모두 설명문`, groupQs, data, diffs);
           return;
         }
@@ -233,54 +261,30 @@ const AnalysisPage: React.FC = () => {
         });
       } else {
         // 일반 문항 기존대로
-        const questionType = (qt?.type || 'multiple') as QuestionType;
+        const questionType = (qt?.type || 'multiple') as QuestionTypeValue;
         let chartData: Array<{ label: string; value: number; isOther?: boolean }> = [];
         let chartColors: string[] | undefined = undefined;
         let respondentCount = 0;
+
         if (questionType === 'multiple' || questionType === 'multiple_select') {
           const options = new Set<string>();
           let otherCount = 0;
           processedRows.forEach((row: any[]) => {
             const value = row[qIdx];
-            if (typeof value === 'string') {
-              if (questionType === 'multiple_select') {
-                value.split('@@').forEach(v => {
-                  const trimmed = v.trim();
-                  if (trimmed.includes('Others_')) {
-                    otherCount++;
-                  } else {
-                    options.add(trimmed);
-                  }
-                });
+            if (typeof value === 'string' && value.trim() !== '') {
+              if (value.toLowerCase().startsWith('기타:')) {
+                otherCount++;
               } else {
-                if (value.trim().includes('Others_')) {
-                  otherCount++;
-                } else {
-                  options.add(value.trim());
-                }
+                options.add(value);
               }
             }
           });
-          chartData = Array.from(options)
-            .filter(option => option.trim() !== '') // 빈 응답 제외
-            .map(option => {
-              let count = 0;
-              processedRows.forEach((row: any[]) => {
-                const value = row[qIdx];
-                if (typeof value === 'string') {
-                  if (questionType === 'multiple_select') {
-                    if (value.split('@@').some(v => v.trim() === option)) count++;
-                  } else {
-                    if (value.trim() === option) count++;
-                  }
-                }
-              });
-              return {
-                label: option,
-                value: count,
-                isOther: false
-              };
-            });
+
+          chartData = Array.from(options).map(option => ({
+            label: option,
+            value: processedRows.filter((row: any[]) => row[qIdx] === option).length
+          }));
+
           if (otherCount > 0) {
             chartData.push({
               label: '기타',
@@ -288,50 +292,34 @@ const AnalysisPage: React.FC = () => {
               isOther: true
             });
           }
+
           respondentCount = processedRows.filter((row: any[]) => {
             const value = row[qIdx];
             return typeof value === 'string' && value.trim() !== '';
           }).length;
         } else if (questionType === 'likert') {
-          const allValues = processedRows.map((row: any[]) => row[qIdx]).filter((v: any) => typeof v === 'string' && v.trim() !== '');
-          const bestScale = LIKERT_SCALES.reduce<{ scale: LikertScale | undefined; score: number }>((acc, scale) => {
-            let match = 0;
-            (allValues as string[]).forEach((v: string) => {
-              if (scale.responses.includes(v)) match += 2;
-              else if (scale.positive_keywords.some((k: string) => v.includes(k)) || scale.negative_keywords.some((k: string) => v.includes(k))) match += 1;
-            });
-            return match > acc.score ? { scale, score: match } : acc;
-          }, { scale: undefined, score: 0 }).scale;
-          if (bestScale) {
-            const counts: Record<string, number> = {};
-            bestScale.responses.forEach((label: string) => { counts[label] = 0; });
-            let sum = 0, cnt = 0;
-            (allValues as string[]).forEach((v: string) => {
-              const idx = bestScale ? bestScale.responses.indexOf(v) : -1;
-              if (idx !== -1) {
-                counts[v]++;
-                sum += bestScale ? bestScale.scores[idx] : 0;
-                cnt++;
-              }
-            });
-            chartData = bestScale.responses.map((label: string, i: number) => ({
-              label,
-              value: counts[label],
-            }));
-            chartColors = bestScale.colors;
-          } else {
-            chartData = [];
-            chartColors = undefined;
-          }
+          const allValues = processedRows.map((row: any[]) => row[qIdx]).filter((v: any) => typeof v === 'string' && v.trim() !== '') as string[];
+          const scoreMap = qt.scoreMap;
+          const counts: Record<string, number> = {};
+
+          allValues.forEach(value => {
+            const score = scoreMap?.[value] || parseInt(value);
+            if (!isNaN(score)) {
+              counts[value] = (counts[value] || 0) + 1;
+            }
+          });
+
+          chartData = Object.entries(counts).map(([label, value]) => ({
+            label,
+            value
+          }));
+
           respondentCount = allValues.length;
         } else if (questionType === 'open') {
           respondentCount = processedRows.filter((row: any[]) => {
             const value = row[qIdx];
             return typeof value === 'string' && value.trim() !== '';
           }).length;
-          chartData = [
-            { label: '응답 수', value: respondentCount }
-          ];
         }
         newCharts.push({
           questionIndex: qIdx,
@@ -409,12 +397,15 @@ const AnalysisPage: React.FC = () => {
 
   return (
     <div className="flex w-screen absolute left-0 top-[64px] min-h-[calc(100vh-64px)] bg-gray-50">
-      <div className="flex w-screen px-0 py-4 gap-4">
+      <div className="flex w-screen px-4 py-4 gap-4">
         {/* 좌측: 문항 선택 패널 */}
-        <aside className="w-[520px] bg-white rounded-lg shadow p-4 flex flex-col h-[calc(100vh-64px)] mr-4">
-          <div className="mb-2 font-bold text-lg">문항 선택</div>
+        <aside className="w-[520px] bg-white rounded-lg shadow p-4 flex flex-col h-[calc(100vh-64px)]">
+          <div className="mb-4">
+            <h2 className="text-lg font-bold mb-2">문항 선택</h2>
+            <p className="text-sm text-gray-600 mb-4">분석할 문항을 선택하고 그래프를 생성하세요.</p>
+          </div>
           
-          {/* 그래프 설정/생성 영역을 상단으로 이동 */}
+          {/* 그래프 설정/생성 영역 */}
           <div className="flex items-center gap-2 mb-4">
             <select
               value={selectedChartType}
@@ -426,10 +417,7 @@ const AnalysisPage: React.FC = () => {
               ))}
             </select>
             <button
-              onClick={() => {
-                console.log('그래프 생성 버튼 클릭');
-                handleCreateCharts();
-              }}
+              onClick={handleCreateCharts}
               className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
               disabled={selectedQuestions.length === 0}
             >
@@ -512,7 +500,7 @@ const AnalysisPage: React.FC = () => {
                           </div>
                           {groupQs.map((qt: any) => {
                             // commonPrefix 제외 뒷부분만 추출
-                            const fullText = surveyData.questions[qt.columnIndex] || '';
+                            const fullText = surveyData.questions[qt.columnIndex]?.text || '';
                             const prefix = groupQs[0]?.commonPrefix || '';
                             let diff = fullText.startsWith(prefix) ? fullText.slice(prefix.length).trim() : fullText;
                             if (!diff) diff = fullText;
@@ -576,10 +564,10 @@ const AnalysisPage: React.FC = () => {
                       />
                       <span
                         className={`text-sm truncate cursor-pointer ${typeColors[t]}`}
-                        title={surveyData.questions[qt.columnIndex]}
+                        title={surveyData.questions[qt.columnIndex]?.text || ''}
                         style={{ maxWidth: '600px', width: '90%', display: 'inline-block', verticalAlign: 'middle' }}
                       >
-                        {surveyData.questions[qt.columnIndex]}
+                        {surveyData.questions[qt.columnIndex]?.text || ''}
                       </span>
                     </div>
                   ))}
@@ -591,6 +579,11 @@ const AnalysisPage: React.FC = () => {
 
         {/* 우측: 그래프 결과 영역 */}
         <main className="flex-1 bg-white rounded-lg shadow p-4 flex flex-col min-w-0 h-[calc(100vh-64px)]">
+          <div className="mb-4">
+            <h2 className="text-lg font-bold">그래프 결과</h2>
+            <p className="text-sm text-gray-600">생성된 그래프가 여기에 표시됩니다.</p>
+          </div>
+          
           {/* 그래프 결과/카드 영역 */}
           <div className="flex-1 overflow-y-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {charts.map(c => (
@@ -602,15 +595,16 @@ const AnalysisPage: React.FC = () => {
                 }}
               >
                 <ChartCard
-                  questionIndex={c.questionIndex}
-                  question={surveyData.questions[c.questionIndex] || `문항 ${c.questionIndex + 1}`}
-                  questionType={c.questionType}
+                  key={c.questionIndex}
+                  questionIndex={String(c.questionIndex)}
+                  question={surveyData.questions[c.questionIndex]?.text || `문항 ${c.questionIndex + 1}`}
+                  questionType={c.questionType.type as QuestionTypeValue}
                   chartType={c.chartType}
                   data={c.data}
                   colors={c.colors}
                   respondentCount={c.respondentCount}
                   onChartTypeChange={(newType) => handleChartTypeChange(c.questionIndex, newType)}
-                  onQuestionTypeChange={(newType) => handleQuestionTypeChange(c.questionIndex, newType)}
+                  onQuestionTypeChange={(newType) => handleQuestionTypeChange(c.questionIndex, { ...c.questionType, type: newType as QuestionTypeValue })}
                   onDataTableEdit={(newData) => handleDataTableEdit(c.questionIndex, newData)}
                   gridSize={c.gridSize}
                   onGridSizeChange={(newSize) => handleGridSizeChange(c.questionIndex, newSize)}
@@ -620,7 +614,10 @@ const AnalysisPage: React.FC = () => {
               </div>
             ))}
             {charts.length === 0 && (
-              <div className="col-span-full text-center text-gray-400 py-12">생성된 그래프가 없습니다.</div>
+              <div className="col-span-full text-center text-gray-400 py-12">
+                <p className="mb-2">생성된 그래프가 없습니다.</p>
+                <p className="text-sm">왼쪽 패널에서 문항을 선택하고 그래프를 생성해주세요.</p>
+              </div>
             )}
           </div>
         </main>

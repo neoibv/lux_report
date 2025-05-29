@@ -5,6 +5,7 @@ import QuestionRowSelector from '../components/QuestionRowSelector';
 import { parseFile } from '../utils/fileParser';
 import useSurveyStore from '../store/surveyStore';
 import * as XLSX from 'xlsx';
+import { QuestionTypeValue, SurveyData, QuestionType, Question } from '../types';
 
 const UploadPage: React.FC = () => {
   const navigate = useNavigate();
@@ -56,7 +57,34 @@ const UploadPage: React.FC = () => {
     try {
       setLoading(true);
       const data = await parseFile(currentFile, selectedQuestionRow);
-      setSurveyData(data);
+      
+      // 문항 유형 정보를 포함하여 questions 배열 생성
+      const questions: Question[] = data.questions.map((text: string, index: number) => {
+        const questionType = data.questionTypes.find((qt: QuestionType) => qt.columnIndex === index);
+        return {
+          id: `q${index}`,
+          text,
+          type: questionType?.type || 'multiple' as QuestionTypeValue,
+          responses: [],
+          matrixGroupId: questionType?.matrixGroupId?.toString(),
+          matrixTitle: questionType?.commonPrefix,
+          scale: questionType?.scale,
+          options: questionType?.options,
+          scoreMap: questionType?.scoreMap
+        };
+      });
+
+      const surveyData: SurveyData = {
+        questions,
+        headers: data.headers || [],
+        rows: data.rows || [],
+        questionTypes: data.questionTypes || [],
+        questionRowIndex: data.questionRowIndex,
+        title: '설문조사',
+        description: '설문조사 결과',
+        totalResponses: data.rows?.length || 0
+      };
+      setSurveyData(surveyData);
       navigate('/question-types');
     } catch (error) {
       setError(error instanceof Error ? error.message : '파일 처리 중 오류가 발생했습니다.');
