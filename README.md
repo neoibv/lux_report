@@ -15,32 +15,34 @@
 npm install
 ```
 
-### 2. 환경변수 파일 생성
-- `.env.example` 파일을 참고해 `.env` 파일을 만드세요.
-
-### 3. 개발 서버 실행
+### 2. 개발 서버 실행
 ```bash
 npm start
 ```
 
-## 폴더 구조
+## 프로젝트 구조
 ```
 survey-insight/
   ├── src/
-  │   ├── components/
-  │   ├── pages/
-  │   ├── store/
-  │   ├── types.ts
-  │   └── utils/
-  ├── package.json
-  ├── .gitignore
-  └── README.md
+  │   ├── components/    # 재사용 가능한 UI 컴포넌트
+  │   ├── pages/        # 페이지 컴포넌트
+  │   ├── store/        # 상태 관리
+  │   ├── types/        # TypeScript 타입 정의
+  │   └── utils/        # 유틸리티 함수
+  ├── public/           # 정적 파일
+  ├── package.json      # 프로젝트 설정 및 의존성
+  ├── tsconfig.json     # TypeScript 설정
+  ├── tailwind.config.js # Tailwind CSS 설정
+  ├── PRD.md           # 제품 요구사항 문서
+  └── README.md        # 프로젝트 문서
 ```
 
-## 환경변수
-- `.env.example` 파일 참고
-- 실제 `.env`는 직접 생성(민감정보는 업로드 금지)
+## 기술 스택
+- React + TypeScript
+- Tailwind CSS
+- Chart.js
+- Zustand (상태 관리)
 
 ## 기타
-- node_modules, build 결과물 등은 업로드하지 않습니다.
+- 자세한 제품 요구사항은 [PRD.md](./PRD.md)를 참고해주세요.
 - 문의: your-email@example.com 
