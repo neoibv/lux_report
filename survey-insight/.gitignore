@@ -1,5 +1,23 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
+# Node
+node_modules/
+npm-debug.log
+
+# Build
+build/
+dist/
+
+# 환경변수
+.env
+.env.*
+
+# 로그/임시
+*.log
+tmp/
+.cache/
+coverage/
+
 # dependencies
 /node_modules
 /.pnp
@@ -18,6 +36,5 @@
 .env.test.local
 .env.production.local
 
-npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

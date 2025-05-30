@@ -1,0 +1,31 @@
+# Node
+node_modules/
+npm-debug.log
+
+# Build
+build/
+dist/
+
+# 환경변수
+.env
+.env.*
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# OS별
+.DS_Store
+Thumbs.db
+
+# 로그/임시
+*.log
+tmp/
+.cache/
+coverage/
+
+# 기타
+*.swp
+*.swo 
