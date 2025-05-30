@@ -300,12 +300,16 @@ export function analyzeQuestionTypes(rows: any[], matrixGroups: Map<number, { in
       if (values.length === 0) return;
       const uniqueValues = [...new Set(values)];
 
+      // 문항의 전체 옵션 후보: uniqueValues + 실제 헤더/질문지에서 추출된 choices(있으면)
+      // 우선 uniqueValues만 사용, 추후 필요시 외부에서 optionsSet 등 주입 가능
+      const options = uniqueValues;
+
       // 행렬형 문항의 응답 패턴 분석
       let likertScaleMatch: LikertScale | null = null;
       for (const scale of Object.values(LIKERT_SCALES)) {
-        if (uniqueValues.length < 5 || uniqueValues.length > 7) continue;
-        const matchCount = scale.responses.filter(r => uniqueValues.includes(r)).length;
-        if (matchCount / scale.responses.length >= 0.7) {
+        if (options.length < 1) continue;
+        const matchCount = scale.responses.filter(r => options.includes(r)).length;
+        if (matchCount / scale.responses.length >= 0.6) {
           likertScaleMatch = scale;
           break;
         }
@@ -318,10 +322,10 @@ export function analyzeQuestionTypes(rows: any[], matrixGroups: Map<number, { in
         matrixGroupId: groupId,
         commonPrefix: group.commonPrefix,
         scale: likertScaleMatch?.id as 'satisfaction_5' | 'agreement_5' | undefined,
-        options: likertScaleMatch?.responses || uniqueValues,
-        otherResponses: uniqueValues.filter(v => !likertScaleMatch?.responses.includes(v) || v.includes('_Others') || v.startsWith('Others_')),
+        options: likertScaleMatch?.responses || options,
+        otherResponses: options.filter(v => !likertScaleMatch?.responses.includes(v) || v.includes('_Others') || v.startsWith('Others_')),
         scoreMap: likertScaleMatch ? Object.fromEntries(
-          uniqueValues.map((resp) => {
+          options.map((resp) => {
             const idx = likertScaleMatch!.responses.indexOf(resp);
             return [resp, idx !== -1 ? likertScaleMatch!.scores[idx] : -1];
           })
@@ -339,6 +343,10 @@ export function analyzeQuestionTypes(rows: any[], matrixGroups: Map<number, { in
     if (values.length === 0) continue;
     const uniqueValues = [...new Set(values)];
 
+    // 문항의 전체 옵션 후보: uniqueValues + 실제 헤더/질문지에서 추출된 choices(있으면)
+    // 우선 uniqueValues만 사용, 추후 필요시 외부에서 optionsSet 등 주입 가능
+    const options = uniqueValues;
+
     // 3-1. 주관식: 고유 응답 10개 이상
     if (uniqueValues.length >= 10) {
       questionTypes.push({
@@ -351,9 +359,9 @@ export function analyzeQuestionTypes(rows: any[], matrixGroups: Map<number, { in
     // 3-2. 리커트 감지: 응답 개수 5~7개, 표준 응답 70% 이상 일치
     let likertScaleMatch: LikertScale | null = null;
     for (const scale of Object.values(LIKERT_SCALES)) {
-      if (uniqueValues.length < 5 || uniqueValues.length > 7) continue;
-      const matchCount = scale.responses.filter(r => uniqueValues.includes(r)).length;
-      if (matchCount / scale.responses.length >= 0.7) {
+      if (options.length < 1) continue;
+      const matchCount = scale.responses.filter(r => options.includes(r)).length;
+      if (matchCount / scale.responses.length >= 0.6) {
         likertScaleMatch = scale;
         break;
       }
@@ -363,7 +371,7 @@ export function analyzeQuestionTypes(rows: any[], matrixGroups: Map<number, { in
       const otherResponses = uniqueValues.filter(v => !likertScaleMatch!.responses.includes(v));
       // scoreMap 생성
       const scoreMap = Object.fromEntries(
-        uniqueValues.map((resp) => {
+        (options).map((resp) => {
           const idx = likertScaleMatch!.responses.indexOf(resp);
           return [resp, idx !== -1 ? likertScaleMatch!.scores[idx] : -1];
         })

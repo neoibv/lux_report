@@ -95,6 +95,7 @@ const AnalysisPage: React.FC = () => {
     responseOrder?: string[];
     scores?: number[];
     yMax: number;
+    avgScore: number;
   }>>([]);
 
   if (!surveyData) {
@@ -166,18 +167,27 @@ const AnalysisPage: React.FC = () => {
           const diff = fullText.startsWith(commonPrefix) ? fullText.slice(commonPrefix.length).trim() : fullText;
           const values = processedRows.map((row: any[]) => row[Number(mq.columnIndex)])
             .filter((v: any) => typeof v === 'string' && v.trim() !== '') as string[];
-          const scoreMap = mq.scoreMap || {
-            '매우 만족': 5, '만족': 4, '보통': 3, '불만족': 2, '매우 불만족': 1,
-            '5': 5, '4': 4, '3': 3, '2': 2, '1': 1
-          };
+          // 자동 scoreMap 생성
+          let scoreMap = mq.scoreMap;
+          if (!scoreMap && mq.options && mq.options.length === 5) {
+            scoreMap = mq.options.reduce((acc: any, opt: string, idx: number) => {
+              acc[opt.trim().toLowerCase()] = 5 - idx;
+              return acc;
+            }, {});
+          }
           let totalScore = 0, totalCount = 0;
           values.forEach(v => {
-            const score = scoreMap[v] || parseInt(v);
-            if (!isNaN(score)) {
-              totalScore += score;
-              totalCount += 1;
-            }
+            const normV = v.trim().toLowerCase();
+            if (!scoreMap || scoreMap[normV] === undefined) return; // 기타응답 제외
+            const score = scoreMap[normV];
+            totalScore += score;
+            totalCount += 1;
           });
+          if (scoreMap) {
+            console.log('matrix scoreMap:', scoreMap);
+            console.log('matrix 응답값:', values);
+            console.log('matrix 평균점수:', totalCount > 0 ? Math.round((totalScore / totalCount) * 100) / 100 : 0);
+          }
           return {
             label: diff,
             value: totalCount > 0 ? Math.round((totalScore / totalCount) * 100) / 100 : 0,
@@ -189,7 +199,8 @@ const AnalysisPage: React.FC = () => {
           const value = row[Number(groupQs[0].columnIndex)];
           return typeof value === 'string' && value.trim() !== '';
         }).length;
-        // ChartCard에 전달
+        // ChartCard에 전달 (matrix)
+        let avgScore = averages[0].value;
         newCharts.push({
           questionIndex: `matrix_${qt.matrixGroupId}`,
           chartType: selectedChartType,
@@ -199,7 +210,8 @@ const AnalysisPage: React.FC = () => {
           respondentCount,
           matrixTitle: commonPrefix, // 제목
           yMax: 5, // y축 최대값
-          ...(qt?.scores ? { scores: qt.scores } : {})
+          ...(qt?.scores ? { scores: qt.scores } : {}),
+          avgScore: avgScore // matrix는 개별 소문항별로 value에 평균점수 포함, 카드에서 value 사용
         });
         return;
       }
@@ -210,6 +222,7 @@ const AnalysisPage: React.FC = () => {
       let respondentCount = 0;
       let responseOrder: string[] | undefined = undefined;
       let scores: number[] | undefined = undefined;
+      let avgScore: number | undefined = undefined;
 
       if (questionType === 'multiple_select') {
         // 복수응답: 옵션별 value 합산, 기타응답 구분, 백분율 내림차순 정렬
@@ -253,33 +266,51 @@ const AnalysisPage: React.FC = () => {
         // 리커트: 옵션별 value 합산, scoreMap, 평균점수
         const values = processedRows.map((row: any[]) => row[qIdx])
           .filter((v: any) => typeof v === 'string' && v.trim() !== '') as string[];
-        
         const counts: Record<string, number> = {};
-        const scoreMap = qt.scoreMap || {
-          '매우 만족': 5, '만족': 4, '보통': 3, '불만족': 2, '매우 불만족': 1,
-          '5': 5, '4': 4, '3': 3, '2': 2, '1': 1
-        };
-
+        // 자동 scoreMap 생성
+        let scoreMap = qt.scoreMap;
+        if (!scoreMap && qt.options && qt.options.length === 5) {
+          scoreMap = qt.options.reduce((acc: any, opt: string, idx: number) => {
+            acc[opt.trim().toLowerCase()] = 5 - idx;
+            return acc;
+          }, {});
+        }
         values.forEach(v => {
           counts[v] = (counts[v] || 0) + 1;
         });
-
-        // 리커트 점수 매칭 및 평균 계산
-        const totalScore = Object.entries(counts).reduce((sum, [label, value]) => {
-          const score = scoreMap[label] || parseInt(label);
-          return sum + (score * value);
-        }, 0);
-        const totalCount = Object.values(counts).reduce((sum, val) => sum + val, 0);
-        const average = totalCount > 0 ? Math.round((totalScore / totalCount) * 100) / 100 : 0;
-
-        chartData = (qt.options || []).map((label: string) => ({
-          label,
-          value: counts[label] || 0,
-          isOther: false
-        }));
-
+        // options 전체 기준으로 chartData 생성 (0건도 포함, isOther: false)
+        const optionOrder: string[] = qt.options || (scoreMap ? Object.keys(scoreMap) : []);
+        chartData = optionOrder.map((label: string) => {
+          const normLabel = label.trim().toLowerCase();
+          return {
+            label,
+            value: counts[label] || 0,
+            isOther: false
+          };
+        });
+        // 기타응답(실제 응답값 중 options에 없는 값) 별도 추가
+        const etcResponses = Object.keys(counts).filter(v => !optionOrder.includes(v));
+        etcResponses.forEach(v => {
+          chartData.push({
+            label: `기타(${v})`,
+            value: counts[v],
+            isOther: true
+          });
+        });
+        // 평균 계산 (options/scoreMap 기준, 빈 응답값도 포함)
+        let totalScore = 0, totalCount = 0;
+        optionOrder.forEach(label => {
+          const normLabel = label.trim().toLowerCase();
+          const score = scoreMap ? scoreMap[normLabel] : undefined;
+          const count = counts[label] || 0;
+          if (typeof score === 'number') {
+            totalScore += score * count;
+            totalCount += count;
+          }
+        });
+        avgScore = totalCount > 0 ? Math.round((totalScore / totalCount) * 100) / 100 : 0;
         respondentCount = values.length;
-        responseOrder = qt.options;
+        responseOrder = optionOrder;
         scores = qt.scores;
       } else if (questionType === 'multiple') {
         // 객관식: 옵션별 value 합산
@@ -317,7 +348,8 @@ const AnalysisPage: React.FC = () => {
         respondentCount,
         scoreMap: qt.scoreMap,
         responseOrder,
-        scores
+        scores,
+        avgScore: avgScore // 평균점수 명시적으로 전달
       });
     });
 
@@ -599,6 +631,7 @@ const AnalysisPage: React.FC = () => {
                   onGridSizeChange={(newSize) => handleGridSizeChange(c.questionIndex, newSize)}
                   onDuplicate={() => handleDuplicateChart(c.questionIndex)}
                   onDelete={() => handleDeleteChart(c.questionIndex)}
+                  avgScore={c.avgScore}
                 />
               </div>
             ))}

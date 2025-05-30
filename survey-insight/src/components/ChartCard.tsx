@@ -34,6 +34,7 @@ interface ChartCardProps {
   scoreMap?: Record<string, number>;
   responseOrder?: string[];
   scores?: number[];
+  avgScore?: number | null;
 }
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend, Title);
@@ -94,7 +95,8 @@ const ChartCard: React.FC<ChartCardProps> = ({
   matrixTitle,
   scoreMap,
   responseOrder,
-  scores
+  scores,
+  avgScore,
 }) => {
   const [dataTableOpen, setDataTableOpen] = useState(false);
   const chartRef = useRef<any>(null);
@@ -375,44 +377,6 @@ const ChartCard: React.FC<ChartCardProps> = ({
     return null;
   };
 
-  // 리커트/행렬형 평균 계산 (기타응답 제외)
-  let avgScore: number | null = null;
-  if ((questionType === 'likert' || questionType === 'matrix') && data.length > 0) {
-    // 1. scoreMap이 있으면 그걸 우선 사용
-    let map: Record<string, number> | undefined = scoreMap;
-    if (!map && responseOrder && scores && responseOrder.length === scores.length) {
-      map = Object.fromEntries(responseOrder.map((resp, i) => [resp, scores[i]]));
-    }
-    let sum = 0, cnt = 0;
-    if (map) {
-      data.filter(d => !d.isOther).forEach(d => {
-        const score = map![d.label];
-        if (typeof score === 'number' && score > 0) {
-          sum += score * d.value;
-          cnt += d.value;
-        }
-      });
-    } else {
-      // fallback: 기존 방식
-      const scoreMapDefault: Record<string, number> = {
-        '매우 만족': 5,
-        '만족': 4,
-        '보통': 3,
-        '불만족': 2,
-        '매우 불만족': 1,
-        '5': 5, '4': 4, '3': 3, '2': 2, '1': 1
-      };
-      data.filter(d => !d.isOther).forEach(d => {
-        const score = scoreMapDefault[d.label] ?? parseInt(d.label);
-        if (!isNaN(score)) {
-          sum += score * d.value;
-          cnt += d.value;
-        }
-      });
-    }
-    if (cnt > 0) avgScore = Math.round((sum / cnt) * 100) / 100;
-  }
-
   const chartMaxWidth = chartData.labels.length >= 7 ? 'max-w-[600px]' : 'max-w-[420px]';
 
   // 모든 차트 타입에서 카드 레이아웃을 반환하도록 통일
@@ -425,7 +389,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
         </div>
       </div>
       {/* 평균 점수 표기 (리커트/행렬형) */}
-      {questionType === 'likert' && avgScore !== null && (
+      {(questionType === 'likert' || questionType === 'matrix') && typeof avgScore === 'number' && (
         <div className={`w-full ${chartMaxWidth} mx-auto`}>
           <div className="mb-2 text-blue-700 font-bold text-base text-center">
             평균 점수: {avgScore} / 5점
