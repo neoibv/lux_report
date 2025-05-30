@@ -130,7 +130,7 @@ export const parseFile = async (file: File, questionRowIndex: number = 1): Promi
         );
 
         // 행렬형 그룹 찾기
-        const matrixGroups = findMatrixGroupsByString(questions);
+        const matrixGroups = findMatrixGroupsByString(questions, rows);
         const questionTypes = analyzeQuestionTypes(rows, matrixGroups);
 
         resolve({
@@ -158,41 +158,68 @@ export const parseFile = async (file: File, questionRowIndex: number = 1): Promi
 };
 
 // 행렬형 문항 그룹을 찾는 함수 (string[] 기반, 내부용)
-const findMatrixGroupsByString = (questions: string[]): Map<number, { indices: number[], commonPrefix: string }> => {
+const findMatrixGroupsByString = (questions: string[], rows?: any[][]): Map<number, { indices: number[], commonPrefix: string }> => {
   const matrixGroups = new Map<number, { indices: number[], commonPrefix: string }>();
   let currentGroupId = 0;
-  
-  // 모든 문항의 접두사 패턴을 찾기
-  const prefixPatterns = new Map<string, number[]>();
-  
-  questions.forEach((question, index) => {
-    // 문장의 주요 부분(마지막 4단어 제외)을 접두사로 사용
-    const words = question.split(/\s+/);
-    if (words.length <= 4) return; // 너무 짧은 문항은 제외
-    
-    // 마지막 4단어를 제외한 나머지를 접두사로 사용
-    const prefix = words.slice(0, -4).join(' ');
-    
-    if (!prefixPatterns.has(prefix)) {
-      prefixPatterns.set(prefix, []);
-    }
-    prefixPatterns.get(prefix)?.push(index);
-  });
-  
-  // 3개 이상의 문항이 같은 접두사를 가지면 행렬형 그룹으로 인정
-  prefixPatterns.forEach((indices, prefix) => {
-    if (indices.length >= 3) {
-      const groupQuestions = indices.map(i => questions[i]);
-      const commonPrefix = findCommonPrefix(groupQuestions);
-      
-      // 공통 접두사가 전체 문장의 80% 이상을 차지하는 경우만 행렬형으로 인정
-      const avgLength = groupQuestions.reduce((sum, q) => sum + q.length, 0) / groupQuestions.length;
-      if (commonPrefix.length >= avgLength * 0.8) {
-        matrixGroups.set(currentGroupId, { indices, commonPrefix });
-        currentGroupId++;
+
+  // 슬라이딩 윈도우로 연속된 문항 그룹핑 (최소 2개 이상)
+  const minPrefixLength = 15; // 공통 도입문구 최소 길이
+  const minGroupSize = 2;
+  const n = questions.length;
+
+  // 모든 쌍에 대해 공통 접두사 계산
+  function getLongestCommonPrefix(strs: string[]): string {
+    if (!strs.length) return '';
+    let prefix = strs[0];
+    for (let i = 1; i < strs.length; i++) {
+      while (strs[i].indexOf(prefix) !== 0) {
+        prefix = prefix.slice(0, -1);
+        if (!prefix) return '';
       }
     }
-  });
+    return prefix;
+  }
+
+  // 윈도우 크기 2~n까지 반복
+  for (let size = n; size >= minGroupSize; size--) {
+    for (let start = 0; start <= n - size; start++) {
+      const indices = Array.from({length: size}, (_, i) => start + i);
+      const groupQuestions = indices.map(i => questions[i]);
+      const commonPrefix = getLongestCommonPrefix(groupQuestions);
+      if (commonPrefix.length >= minPrefixLength) {
+        // 항목명(차이점) 추출: 길이 제한 없이, 모두 달라야 함
+        const differences = groupQuestions.map(q => q.slice(commonPrefix.length).trim());
+        const allUnique = new Set(differences).size === groupQuestions.length;
+        if (!allUnique) continue;
+        // 응답 옵션 70% 이상 일치
+        let allSimilarOptions = true;
+        if (rows) {
+          const optionSets = indices.map(colIdx => {
+            const values = rows.map(row => row[colIdx]).filter(v => v !== undefined && v !== null && v !== '');
+            return Array.from(new Set(values)).sort();
+          });
+          // 첫 옵션 집합과 나머지 비교
+          const firstSet = optionSets[0];
+          for (let i = 1; i < optionSets.length; i++) {
+            const setA = new Set(firstSet);
+            const setB = new Set(optionSets[i]);
+            const intersection = new Set([...setA].filter(x => setB.has(x)));
+            const ratio = intersection.size / Math.max(setA.size, setB.size);
+            if (ratio < 0.7) {
+              allSimilarOptions = false;
+              break;
+            }
+          }
+        }
+        if (allSimilarOptions) {
+          // 이미 포함된 인덱스는 건너뜀(겹침 방지)
+          if ([...matrixGroups.values()].some(g => g.indices.some(idx => indices.includes(idx)))) continue;
+          matrixGroups.set(currentGroupId, { indices, commonPrefix });
+          currentGroupId++;
+        }
+      }
+    }
+  }
 
   return matrixGroups;
 };
@@ -231,9 +258,44 @@ export function analyzeQuestionTypes(rows: any[], matrixGroups: Map<number, { in
   const questionTypes: QuestionType[] = [];
   const columnCount = rows[0].length;
 
-  // 행렬형 문항 먼저 처리
+  // 1. 복수응답 먼저 처리 (응답 데이터 기반)
+  for (let i = 0; i < columnCount; i++) {
+    const values = rows.map(row => row[i]).filter(v => v !== undefined && v !== null && v !== '');
+    if (values.length === 0) continue;
+
+    // 복수응답: @@ 구분자 포함 비율이 30% 이상이면 복수응답
+    const multiSelectRatio = values.filter(v => typeof v === 'string' && v.includes('@@')).length / values.length;
+    if (multiSelectRatio >= 0.3) {
+      // 보기 목록 추출
+      const optionsSet = new Set<string>();
+      const otherResponsesSet = new Set<string>();
+      values.forEach(v => {
+        if (typeof v === 'string') {
+          v.split('@@').forEach(opt => {
+            const trimmedOpt = opt.trim();
+            if (trimmedOpt.includes('_Others') || trimmedOpt.startsWith('Others_')) {
+              otherResponsesSet.add(trimmedOpt);
+            } else {
+              optionsSet.add(trimmedOpt);
+            }
+          });
+        }
+      });
+      questionTypes.push({
+        columnIndex: i,
+        type: 'multiple_select',
+        options: Array.from(optionsSet),
+        otherResponses: Array.from(otherResponsesSet)
+      });
+    }
+  }
+
+  // 2. 행렬형 문항 처리 (복수응답으로 분류되지 않은 문항만)
   matrixGroups.forEach((group, groupId) => {
     group.indices.forEach(columnIndex => {
+      // 이미 복수응답으로 분류된 문항은 건너뛰기
+      if (questionTypes.some(qt => qt.columnIndex === columnIndex)) return;
+
       const values = rows.map(row => row[columnIndex]).filter(v => v !== undefined && v !== null && v !== '');
       if (values.length === 0) return;
       const uniqueValues = [...new Set(values)];
@@ -257,7 +319,7 @@ export function analyzeQuestionTypes(rows: any[], matrixGroups: Map<number, { in
         commonPrefix: group.commonPrefix,
         scale: likertScaleMatch?.id as 'satisfaction_5' | 'agreement_5' | undefined,
         options: likertScaleMatch?.responses || uniqueValues,
-        otherResponses: uniqueValues.filter(v => !likertScaleMatch?.responses.includes(v)),
+        otherResponses: uniqueValues.filter(v => !likertScaleMatch?.responses.includes(v) || v.includes('_Others') || v.startsWith('Others_')),
         scoreMap: likertScaleMatch ? Object.fromEntries(
           uniqueValues.map((resp) => {
             const idx = likertScaleMatch!.responses.indexOf(resp);
@@ -268,34 +330,16 @@ export function analyzeQuestionTypes(rows: any[], matrixGroups: Map<number, { in
     });
   });
 
-  // 나머지 문항 처리
+  // 3. 나머지 문항 처리 (복수응답, 행렬형으로 분류되지 않은 문항만)
   for (let i = 0; i < columnCount; i++) {
-    // 이미 행렬형으로 처리된 문항은 건너뛰기
+    // 이미 분류된 문항은 건너뛰기
     if (questionTypes.some(qt => qt.columnIndex === i)) continue;
 
     const values = rows.map(row => row[i]).filter(v => v !== undefined && v !== null && v !== '');
     if (values.length === 0) continue;
     const uniqueValues = [...new Set(values)];
 
-    // 1. 복수응답: @@ 구분자 포함 비율이 30% 이상이면 복수응답
-    const multiSelectRatio = values.filter(v => typeof v === 'string' && v.includes('@@')).length / values.length;
-    if (multiSelectRatio >= 0.3) {
-      // 보기 목록 추출
-      const optionsSet = new Set<string>();
-      values.forEach(v => {
-        if (typeof v === 'string') {
-          v.split('@@').forEach(opt => optionsSet.add(opt.trim()));
-        }
-      });
-      questionTypes.push({
-        columnIndex: i,
-        type: 'multiple_select',
-        options: Array.from(optionsSet)
-      });
-      continue;
-    }
-
-    // 2. 주관식: 고유 응답 10개 이상
+    // 3-1. 주관식: 고유 응답 10개 이상
     if (uniqueValues.length >= 10) {
       questionTypes.push({
         columnIndex: i,
@@ -304,7 +348,7 @@ export function analyzeQuestionTypes(rows: any[], matrixGroups: Map<number, { in
       continue;
     }
 
-    // 3. 리커트 감지: 응답 개수 5~7개, 표준 응답 70% 이상 일치
+    // 3-2. 리커트 감지: 응답 개수 5~7개, 표준 응답 70% 이상 일치
     let likertScaleMatch: LikertScale | null = null;
     for (const scale of Object.values(LIKERT_SCALES)) {
       if (uniqueValues.length < 5 || uniqueValues.length > 7) continue;
@@ -335,7 +379,7 @@ export function analyzeQuestionTypes(rows: any[], matrixGroups: Map<number, { in
       continue;
     }
 
-    // 4. 객관식: 응답 2~6개, 리커트와 무관
+    // 3-3. 객관식: 응답 2~6개, 리커트와 무관
     if (uniqueValues.length >= 2 && uniqueValues.length <= 6) {
       questionTypes.push({
         columnIndex: i,
@@ -345,7 +389,7 @@ export function analyzeQuestionTypes(rows: any[], matrixGroups: Map<number, { in
       continue;
     }
 
-    // 5. 기본값: 주관식
+    // 3-4. 기본값: 주관식
     questionTypes.push({
       columnIndex: i,
       type: 'open'
@@ -373,4 +417,108 @@ export const findMatrixGroups = (questions: Question[]): { id: string; title: st
   });
   
   return Array.from(groups.values());
+};
+
+// 행렬형 문항 감지 함수 개선
+const detectMatrixQuestion = (questions: string[]): boolean => {
+  if (questions.length < 2) return false;
+  
+  // 첫 번째 행이 문항이고, 나머지 행들이 보기인 경우
+  const firstRow = questions[0].trim();
+  const otherRows = questions.slice(1);
+  
+  // 첫 번째 행이 문항 형식인지 확인 (숫자로 시작하거나 특수문자로 시작)
+  const isFirstRowQuestion = /^[\d\s\.\)\-\*]+[가-힣a-zA-Z]/.test(firstRow);
+  
+  // 나머지 행들이 보기 형식인지 확인 (알파벳이나 숫자로 시작)
+  const areOtherRowsOptions = otherRows.every(row => 
+    /^[a-zA-Z0-9][\s\.\)]+[가-힣a-zA-Z]/.test(row.trim())
+  );
+  
+  return isFirstRowQuestion && areOtherRowsOptions;
+};
+
+// 행렬형 문항 파싱 함수 개선
+const parseMatrixQuestion = (questions: string[]): { question: string; options: string[] } => {
+  const question = questions[0].trim();
+  const options = questions.slice(1).map(row => {
+    // 보기에서 알파벳/숫자와 점/괄호 제거
+    return row.trim().replace(/^[a-zA-Z0-9][\s\.\)]+/, '').trim();
+  });
+  
+  return { question, options };
+};
+
+interface ParsedData {
+  questions: string[];
+  questionOptions: string[][];
+  responses: string[][];
+}
+
+const parseExcelData = (data: any[]): ParsedData => {
+  const questions: string[] = [];
+  const questionOptions: string[][] = [];
+  const responses: string[][] = [];
+
+  // 행렬형 문항 처리 로직 개선
+  let currentMatrixQuestion: string[] = [];
+  let isProcessingMatrix = false;
+  let matrixQuestionCount = 0;
+
+  for (let i = 0; i < data.length; i++) {
+    const row = data[i];
+    const rowValues = Object.values(row).filter((value): value is string => 
+      typeof value === 'string' && value.trim() !== ''
+    );
+
+    if (rowValues.length === 0) continue;
+
+    // 행렬형 문항 시작 감지
+    if (!isProcessingMatrix && detectMatrixQuestion(rowValues)) {
+      isProcessingMatrix = true;
+      currentMatrixQuestion = rowValues;
+      matrixQuestionCount = 1;
+      continue;
+    }
+
+    // 행렬형 문항 계속 처리
+    if (isProcessingMatrix) {
+      if (rowValues.length > 0 && /^[a-zA-Z0-9][\s\.\)]+[가-힣a-zA-Z]/.test(rowValues[0])) {
+        currentMatrixQuestion.push(...rowValues);
+        matrixQuestionCount++;
+      } else {
+        // 행렬형 문항 종료
+        if (currentMatrixQuestion.length > 0) {
+          const { question, options } = parseMatrixQuestion(currentMatrixQuestion);
+          questions.push(question);
+          questionOptions.push(options);
+        }
+        isProcessingMatrix = false;
+        currentMatrixQuestion = [];
+      }
+    }
+
+    // 일반 문항 처리
+    if (!isProcessingMatrix && rowValues.length > 0) {
+      const question = rowValues[0].trim();
+      if (question && !questions.includes(question)) {
+        questions.push(question);
+        const options = rowValues.slice(1).filter(opt => opt.trim() !== '');
+        questionOptions.push(options);
+      }
+    }
+  }
+
+  // 마지막 행렬형 문항 처리
+  if (isProcessingMatrix && currentMatrixQuestion.length > 0) {
+    const { question, options } = parseMatrixQuestion(currentMatrixQuestion);
+    questions.push(question);
+    questionOptions.push(options);
+  }
+
+  return {
+    questions,
+    questionOptions,
+    responses
+  };
 }; 

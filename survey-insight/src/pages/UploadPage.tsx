@@ -74,6 +74,21 @@ const UploadPage: React.FC = () => {
         };
       });
 
+      // 행렬형 문항 그룹 생성
+      const matrixGroups = new Map<string, { id: string; title: string; questions: Question[] }>();
+      questions.forEach(question => {
+        if (question.matrixGroupId) {
+          if (!matrixGroups.has(question.matrixGroupId)) {
+            matrixGroups.set(question.matrixGroupId, {
+              id: question.matrixGroupId,
+              title: question.matrixTitle || question.matrixGroupId,
+              questions: []
+            });
+          }
+          matrixGroups.get(question.matrixGroupId)?.questions.push(question);
+        }
+      });
+
       const surveyData: SurveyData = {
         questions,
         headers: data.headers || [],
@@ -82,8 +97,10 @@ const UploadPage: React.FC = () => {
         questionRowIndex: data.questionRowIndex,
         title: '설문조사',
         description: '설문조사 결과',
-        totalResponses: data.rows?.length || 0
+        totalResponses: data.rows?.length || 0,
+        matrixGroups: Array.from(matrixGroups.values())
       };
+
       setSurveyData(surveyData);
       navigate('/question-types');
     } catch (error) {

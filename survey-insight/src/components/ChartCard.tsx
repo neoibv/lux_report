@@ -101,17 +101,47 @@ const ChartCard: React.FC<ChartCardProps> = ({
 
   // 차트 데이터 메모이제이션
   const chartData = useMemo(() => {
+    // 데이터가 없는 경우 빈 배열 반환
+    if (!data || data.length === 0) {
+      return {
+        labels: [],
+        values: [],
+        backgroundColors: [],
+        sortedData: []
+      };
+    }
+
     const sortedData = [
       ...data.filter(d => !d.isOther),
       ...data.filter(d => d.isOther)
     ];
+
+    // 데이터가 없는 경우 빈 배열 반환
+    if (sortedData.length === 0) {
+      return {
+        labels: [],
+        values: [],
+        backgroundColors: [],
+        sortedData: []
+      };
+    }
+
     const labels = sortedData.map(d => d.label);
     const values = sortedData.map(d => d.value);
-    const backgroundColors = colors
-      ? colors.slice(0, sortedData.length)
-      : (questionType === 'likert' || questionType === 'matrix')
-        ? sortedData.map((d, i) => d.isOther ? '#E0E0E0' : likertColors[i % likertColors.length])
-        : sortedData.map((d, i) => d.isOther ? '#E0E0E0' : generateColorSet(sortedData.length)[i]);
+    
+    // 색상 설정
+    let backgroundColors;
+    if (colors && colors.length > 0) {
+      backgroundColors = colors.slice(0, sortedData.length);
+    } else if (questionType === 'likert' || questionType === 'matrix') {
+      backgroundColors = sortedData.map((d, i) => 
+        d.isOther ? '#E0E0E0' : likertColors[i % likertColors.length]
+      );
+    } else {
+      backgroundColors = sortedData.map((d, i) => 
+        d.isOther ? '#E0E0E0' : generateColorSet(sortedData.length)[i]
+      );
+    }
 
     return {
       labels,
@@ -124,6 +154,20 @@ const ChartCard: React.FC<ChartCardProps> = ({
   // 차트 옵션 메모이제이션
   const chartOptions = useMemo(() => {
     const isMatrixChart = chartType === 'verticalMatrix' || chartType === 'horizontalMatrix';
+    const maxValue = chartData.values.length > 0 ? Math.max(...chartData.values) : 5;
+
+    // stepSize 자동 계산 함수
+    function getStepSize(max: number) {
+      if (max <= 10) return 1;
+      if (max <= 50) return 5;
+      if (max <= 100) return 10;
+      if (max <= 500) return 50;
+      if (max <= 1000) return 100;
+      if (max <= 5000) return 500;
+      return Math.ceil(max / 10);
+    }
+    const stepSize = getStepSize(maxValue);
+
     const baseOptions: ChartOptions<'bar' | 'pie' | 'doughnut'> = {
       responsive: true,
       maintainAspectRatio: false,
@@ -208,16 +252,16 @@ const ChartCard: React.FC<ChartCardProps> = ({
               y: {
                 beginAtZero: true,
                 min: 0,
-                max: 5,
-                ticks: { stepSize: 1, callback: (v: any) => v },
+                max: Math.max(5, maxValue),
+                ticks: { stepSize, callback: (v: any) => v },
               },
             }
           : {
               x: {
                 beginAtZero: true,
                 min: 0,
-                max: 5,
-                ticks: { stepSize: 1, callback: (v: any) => v },
+                max: Math.max(5, maxValue),
+                ticks: { stepSize, callback: (v: any) => v },
               },
               y: { grid: { display: false } },
             },
@@ -225,24 +269,68 @@ const ChartCard: React.FC<ChartCardProps> = ({
     }
 
     return baseOptions;
-  }, [chartType, chartData.labels]);
+  }, [chartType, chartData.labels, chartData.values]);
 
   // 차트 데이터 메모이제이션
   const chartDataConfig = useMemo(() => {
     const isMatrixChart = chartType === 'verticalMatrix' || chartType === 'horizontalMatrix';
+    if (!chartData.labels.length) {
+      return {
+        labels: [],
+        datasets: [{
+          data: [],
+          backgroundColor: [],
+          borderRadius: 0,
+          barPercentage: 0.75,
+          categoryPercentage: 0.85,
+        }]
+      };
+    }
+
+    // 실제 응답 인원수: props로 받거나, 없으면 value 합의 반올림(Math.round)
+    const totalResponses = respondentCount !== undefined ? respondentCount : Math.round(data.reduce((sum, item) => sum + item.value, 0));
+
+    // 문항 유형별 데이터/색상/비율 처리
+    let datasetData: number[] = [];
+    let backgroundColor: string[] = [];
+    if (questionType === 'multiple_select') {
+      // 복수응답: value 합 기준 100% 비율, 기타응답은 회색
+      const sum = data.reduce((acc, d) => acc + d.value, 0);
+      datasetData = sum ? chartData.values.map(v => Math.round((v / sum) * 1000) / 10) : chartData.values.map(() => 0);
+      backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : palette[i % palette.length]);
+    } else if (questionType === 'likert' || questionType === 'matrix') {
+      // 리커트/행렬형: 응답자 수 기준 100% 비율, likertColors, 기타응답은 회색
+      datasetData = totalResponses ? chartData.values.map(v => Math.round((v / totalResponses) * 1000) / 10) : chartData.values.map(() => 0);
+      backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : likertColors[i % likertColors.length]);
+    } else {
+      // 객관식 등 기타: 응답자 수 기준 100% 비율, 자동 색상
+      datasetData = totalResponses ? chartData.values.map(v => Math.round((v / totalResponses) * 1000) / 10) : chartData.values.map(() => 0);
+      backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : generateColorSet(chartData.sortedData.length)[i]);
+    }
+
+    // 행렬형 차트는 실제 값(점수 등) 그대로 사용
+    if (isMatrixChart) {
+      datasetData = chartData.values;
+    }
+
     return {
       labels: chartData.labels,
       datasets: [{
-        data: chartData.values,
-        backgroundColor: chartData.backgroundColors,
+        data: datasetData,
+        backgroundColor,
         borderRadius: 0,
         barPercentage: 0.75,
         categoryPercentage: 0.85,
       }]
     };
-  }, [chartType, chartData]);
+  }, [chartType, chartData, data, questionType, respondentCount]);
 
   // 차트 컴포넌트 렌더링
+  console.log('chartDataConfig', chartDataConfig);
+  console.log('props.data', data);
+  if (chartDataConfig.datasets && chartDataConfig.datasets[0]) {
+    console.log('chartDataConfig.datasets[0].data', chartDataConfig.datasets[0].data);
+  }
   const renderChart = () => {
     if (chartType === 'vertical' || chartType === 'horizontal') {
       return (
@@ -287,38 +375,6 @@ const ChartCard: React.FC<ChartCardProps> = ({
     return null;
   };
 
-  // 차트 인스턴스 정리
-  useEffect(() => {
-    return () => {
-      if (chartRef.current) {
-        chartRef.current.destroy();
-      }
-    };
-  }, []);
-
-  // 차트 타입이나 데이터가 변경될 때 차트 업데이트
-  useEffect(() => {
-    if (chartRef.current) {
-      chartRef.current.destroy();
-    }
-  }, [chartType, data, questionType]);
-
-  // 실제 응답 인원수: props로 받거나, 없으면 value 합의 반올림(Math.round)
-  const totalResponses = respondentCount !== undefined ? respondentCount : Math.round(data.reduce((sum, item) => sum + item.value, 0));
-
-  // 백분율 변환 함수
-  function toPercent(val: number) {
-    // 복수응답은 전체 응답 수가 아니라 value의 합을 100%로
-    if (questionType === 'multiple_select') {
-      const sum = data.reduce((acc, d) => acc + d.value, 0);
-      if (!sum) return 0;
-      return Math.round((val / sum) * 1000) / 10;
-    } else {
-      if (!totalResponses || totalResponses === 0) return 0;
-      return Math.round((val / totalResponses) * 1000) / 10;
-    }
-  }
-
   // 리커트/행렬형 평균 계산 (기타응답 제외)
   let avgScore: number | null = null;
   if ((questionType === 'likert' || questionType === 'matrix') && data.length > 0) {
@@ -357,10 +413,6 @@ const ChartCard: React.FC<ChartCardProps> = ({
     if (cnt > 0) avgScore = Math.round((sum / cnt) * 100) / 100;
   }
 
-  // 차트 데이터 변환 (백분율 or 점수)
-  const isMatrixChart = chartType === 'verticalMatrix' || chartType === 'horizontalMatrix';
-  const chartValues = isMatrixChart ? chartData.values : chartData.values.map(d => toPercent(d));
-
   const chartMaxWidth = chartData.labels.length >= 7 ? 'max-w-[600px]' : 'max-w-[420px]';
 
   // 모든 차트 타입에서 카드 레이아웃을 반환하도록 통일
@@ -369,7 +421,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
       <div className="flex justify-between items-start mb-4">
         <h3 className="text-lg font-semibold break-words">{matrixTitle || question}</h3>
         <div className="text-sm text-gray-600">
-          총 응답: {formatNumber(totalResponses)}개
+          총 응답: {formatNumber(respondentCount || Math.round(data.reduce((sum, item) => sum + item.value, 0)))}개
         </div>
       </div>
       {/* 평균 점수 표기 (리커트/행렬형) */}
@@ -450,37 +502,50 @@ const ChartCard: React.FC<ChartCardProps> = ({
               </tr>
             </thead>
             <tbody>
-              {chartData.sortedData.map((row, idx) => (
-                <tr key={row.label}>
-                  <td>
-                    <input
-                      className="border rounded px-1 py-0.5 w-full"
-                      value={row.label}
-                      onChange={e => {
-                        const newData = [...chartData.sortedData];
-                        newData[idx] = { ...row, label: e.target.value };
-                        onDataTableEdit(newData);
-                      }}
-                    />
-                  </td>
-                  <td>{formatNumber(row.value)}</td>
-                  <td>{
-                    (questionType === 'open')
-                      ? '-' : `${formatNumber(toPercent(row.value))}%`
-                  }</td>
-                  <td className="text-center">
-                    <input
-                      type="checkbox"
-                      checked={!!row.isOther}
-                      onChange={e => {
-                        const newData = [...chartData.sortedData];
-                        newData[idx] = { ...row, isOther: e.target.checked };
-                        onDataTableEdit(newData);
-                      }}
-                    />
-                  </td>
-                </tr>
-              ))}
+              {chartData.sortedData.map((row, idx) => {
+                const totalResponses = respondentCount !== undefined ? respondentCount : Math.round(data.reduce((sum, item) => sum + item.value, 0));
+                const toPercent = (val: number) => {
+                  if (questionType === 'multiple_select') {
+                    const sum = data.reduce((acc, d) => acc + d.value, 0);
+                    if (!sum) return 0;
+                    return Math.round((val / sum) * 1000) / 10;
+                  } else {
+                    if (!totalResponses || totalResponses === 0) return 0;
+                    return Math.round((val / totalResponses) * 1000) / 10;
+                  }
+                };
+                return (
+                  <tr key={row.label}>
+                    <td>
+                      <input
+                        className="border rounded px-1 py-0.5 w-full"
+                        value={row.label}
+                        onChange={e => {
+                          const newData = [...chartData.sortedData];
+                          newData[idx] = { ...row, label: e.target.value };
+                          onDataTableEdit(newData);
+                        }}
+                      />
+                    </td>
+                    <td>{formatNumber(row.value)}</td>
+                    <td>{
+                      (questionType === 'open')
+                        ? '-' : `${formatNumber(toPercent(row.value))}%`
+                    }</td>
+                    <td className="text-center">
+                      <input
+                        type="checkbox"
+                        checked={!!row.isOther}
+                        onChange={e => {
+                          const newData = [...chartData.sortedData];
+                          newData[idx] = { ...row, isOther: e.target.checked };
+                          onDataTableEdit(newData);
+                        }}
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

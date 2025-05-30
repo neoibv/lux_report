@@ -1,4 +1,4 @@
-export type QuestionTypeValue = 'likert' | 'multiple' | 'multiple_select' | 'open' | 'matrix';
+export type QuestionTypeValue = 'multiple' | 'multiple_select' | 'open' | 'likert' | 'matrix';
 
 export interface QuestionType {
   columnIndex: number;
@@ -11,27 +11,19 @@ export interface QuestionType {
   scoreMap?: Record<string, number>;
 }
 
-export type ChartType =
-  | 'vertical'
-  | 'horizontal'
-  | 'verticalStacked'
-  | 'horizontalStacked'
-  | 'pie'
-  | 'donut'
-  | 'verticalMatrix'
-  | 'horizontalMatrix';
+export type ChartType = 'vertical' | 'horizontal' | 'pie' | 'donut' | 'verticalMatrix' | 'horizontalMatrix';
 
 export interface Question {
   id: string;
   text: string;
   type: QuestionTypeValue;
-  responses: Response[];
+  responses: any[];
   matrixGroupId?: string;
   matrixTitle?: string;
-  responseOrder?: string[];
+  scale?: string;
+  options?: string[];
+  scoreMap?: Record<string, number>;
   scores?: number[];
-  chartType?: ChartType;
-  gridSize?: { w: number; h: number };
 }
 
 export interface Response {
@@ -43,17 +35,13 @@ export interface Response {
 export interface SurveyData {
   questions: Question[];
   headers: string[];
-  rows: any[];
-  questionTypes: QuestionType[];
+  rows: any[][];
+  questionTypes: any[];
   questionRowIndex: number;
-  title?: string;
-  description?: string;
-  totalResponses?: number;
-  matrixGroups?: {
-    id: string;
-    title: string;
-    questions: Question[];
-  }[];
+  title: string;
+  description: string;
+  totalResponses: number;
+  matrixGroups?: { id: string; title: string; questions: Question[] }[];
 }
 
 export interface ChartData {
