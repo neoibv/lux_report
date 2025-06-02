@@ -105,6 +105,62 @@ function findCommonPrefix(strings: string[]) {
   return prefix;
 }
 
+// --- 데이터 가공 함수 분리 ---
+function getMatrixChartData(
+  chartData: { labels: string[]; values: number[]; sortedData: { isOther?: boolean }[] },
+  data: Response[],
+  respondentCount: number | undefined,
+  matrixColors: string[]
+) {
+  const datasetData = chartData.values;
+  const backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : matrixColors[i % matrixColors.length]);
+  return {
+    labels: chartData.labels,
+    datasets: [{
+      data: datasetData,
+      backgroundColor,
+      borderRadius: 0,
+      barPercentage: 0.75,
+      categoryPercentage: 0.85,
+    }]
+  };
+}
+
+function getGeneralChartData(
+  chartData: { labels: string[]; values: number[]; sortedData: { isOther?: boolean }[] },
+  data: Response[],
+  questionType: QuestionTypeValue,
+  respondentCount: number | undefined,
+  palette: string[],
+  likertColors: string[],
+  generateColorSet: (n: number) => string[]
+) {
+  const totalResponses = respondentCount !== undefined ? respondentCount : Math.round(data.reduce((sum, item) => sum + item.value, 0));
+  let datasetData: number[] = [];
+  let backgroundColor: string[] = [];
+  if (questionType === 'multiple_select') {
+    const sum = data.reduce((acc, d) => acc + d.value, 0);
+    datasetData = sum ? chartData.values.map(v => Math.round((v / sum) * 1000) / 10) : chartData.values.map(() => 0);
+    backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : palette[i % palette.length]);
+  } else if (questionType === 'likert' || questionType === 'matrix') {
+    datasetData = totalResponses ? chartData.values.map(v => Math.round((v / totalResponses) * 1000) / 10) : chartData.values.map(() => 0);
+    backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : likertColors[i % likertColors.length]);
+  } else {
+    datasetData = totalResponses ? chartData.values.map(v => Math.round((v / totalResponses) * 1000) / 10) : chartData.values.map(() => 0);
+    backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : generateColorSet(chartData.sortedData.length)[i]);
+  }
+  return {
+    labels: chartData.labels,
+    datasets: [{
+      data: datasetData,
+      backgroundColor,
+      borderRadius: 0,
+      barPercentage: 0.75,
+      categoryPercentage: 0.85,
+    }]
+  };
+}
+
 const ChartCard: React.FC<ChartCardProps> = ({
   questionIndex,
   question,
@@ -179,12 +235,9 @@ const ChartCard: React.FC<ChartCardProps> = ({
     };
   }, [data, colors, questionType, chartType]);
 
-  // 차트 옵션 메모이제이션
-  const chartOptions = useMemo(() => {
-    const isMatrixChart = chartType === 'verticalMatrix' || chartType === 'horizontalMatrix';
+  // --- 옵션 useMemo 분리 ---
+  const matrixChartOptions = useMemo(() => {
     const maxValue = chartData.values.length > 0 ? Math.max(...chartData.values) : 5;
-
-    // stepSize 자동 계산 함수
     function getStepSize(max: number) {
       if (max <= 10) return 1;
       if (max <= 50) return 5;
@@ -195,60 +248,88 @@ const ChartCard: React.FC<ChartCardProps> = ({
       return Math.ceil(max / 10);
     }
     const stepSize = getStepSize(maxValue);
-
-    const baseOptions: ChartOptions<'bar' | 'pie' | 'doughnut'> = {
+    return {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        legend: { 
-          display: chartType === 'pie' || chartType === 'donut',
-          position: 'bottom',
-          labels: {
-            boxWidth: 12,
-            padding: 15
-          }
-        },
-        tooltip: { 
-          enabled: true,
-          padding: 10,
-          backgroundColor: 'rgba(0, 0, 0, 0.8)'
-        },
+        legend: { display: false },
+        tooltip: { enabled: true, padding: 10, backgroundColor: 'rgba(0, 0, 0, 0.8)' },
         title: { display: false },
         datalabels: {
           display: true,
           color: '#000',
-          font: {
-            weight: 'bold' as const
-          },
+          font: { weight: 'bold' },
           anchor: 'end',
           align: 'top',
-          formatter: (value: number, context: any) => {
-            if (value === undefined || value === null) return '';
-            // 행렬형 차트는 값만, 그 외는 기존대로
-            if (chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') {
-              return formatNumber(value);
-            } else {
-              const label = chartData.labels[context.dataIndex];
-              const shortLabel = ellipsisLabel(label, 10);
-              return `${shortLabel}: ${formatNumber(value)}%`;
-            }
-          }
+          formatter: (value: number) => value === undefined || value === null ? '' : formatNumber(value),
         }
-      }
+      },
+      indexAxis: chartType === 'verticalMatrix' ? 'x' : 'y',
+      scales: chartType === 'verticalMatrix'
+        ? {
+            x: {
+              grid: { display: false },
+              ticks: {
+                callback: (v: any, idx: number) => ellipsisLabel(chartData.labels[idx], 10),
+                maxRotation: 45,
+                minRotation: 0,
+                autoSkip: false,
+              },
+            },
+            y: {
+              beginAtZero: true,
+              min: 0,
+              max: Math.max(5, maxValue),
+              ticks: { stepSize, callback: (v: any) => v },
+            },
+          }
+        : {
+            x: {
+              beginAtZero: true,
+              min: 0,
+              max: Math.max(5, maxValue),
+              ticks: { stepSize, callback: (v: any) => v },
+            },
+            y: {
+              grid: { display: false },
+              ticks: {
+                callback: (v: any, idx: number) => ellipsisLabel(chartData.labels[idx], 10),
+                maxRotation: 45,
+                minRotation: 0,
+                autoSkip: false,
+              },
+            },
+          },
     };
+  }, [chartType, chartData.labels, chartData.values]);
 
-    if (chartType === 'vertical' || chartType === 'horizontal') {
-      return {
-        ...baseOptions,
-        indexAxis: chartType === 'vertical' ? 'x' as const : 'y' as const,
+  const generalChartOptions = useMemo(() => {
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: chartType === 'pie' || chartType === 'donut',
+          position: 'bottom',
+          labels: { boxWidth: 12, padding: 15 }
+        },
+        tooltip: { enabled: true, padding: 10, backgroundColor: 'rgba(0, 0, 0, 0.8)' },
+        title: { display: false },
+        datalabels: {
+          display: true,
+          color: '#000',
+          font: { weight: 'bold' },
+          anchor: 'end',
+          align: 'top',
+          formatter: (value: number) => value === undefined || value === null ? '' : `${formatNumber(value)}%`,
+        }
+      },
+      ...(chartType === 'vertical' || chartType === 'horizontal' ? {
+        indexAxis: chartType === 'vertical' ? 'x' : 'y',
         scales: chartType === 'vertical'
           ? {
               x: {
-                grid: {
-                  display: true,
-                  drawOnChartArea: true,
-                  color: '#e5e7eb',
-                },
+                grid: { display: true, drawOnChartArea: true, color: '#e5e7eb' },
                 ticks: {
                   callback: (v: any, idx: number) => ellipsisLabel(chartData.labels[idx], 10),
                   maxRotation: 45,
@@ -261,11 +342,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
           : {
               x: { beginAtZero: true, max: 100, ticks: { callback: (v: any) => `${v}%` } },
               y: {
-                grid: {
-                  display: true,
-                  drawOnChartArea: true,
-                  color: '#e5e7eb',
-                },
+                grid: { display: true, drawOnChartArea: true, color: '#e5e7eb' },
                 ticks: {
                   callback: (v: any, idx: number) => ellipsisLabel(chartData.labels[idx], 10),
                   maxRotation: 45,
@@ -274,154 +351,58 @@ const ChartCard: React.FC<ChartCardProps> = ({
                 },
               },
             },
-      };
-    }
-
-    if (chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') {
-      return {
-        ...baseOptions,
-        indexAxis: chartType === 'verticalMatrix' ? 'x' as const : 'y' as const,
-        scales: chartType === 'verticalMatrix'
-          ? {
-              x: {
-                grid: { display: false },
-                ticks: {
-                  callback: (v: any, idx: number) => ellipsisLabel(chartData.labels[idx], 10),
-                  maxRotation: 45,
-                  minRotation: 0,
-                  autoSkip: false,
-                },
-              },
-              y: {
-                beginAtZero: true,
-                min: 0,
-                max: Math.max(5, maxValue),
-                ticks: { stepSize, callback: (v: any) => v },
-              },
-            }
-          : {
-              x: {
-                beginAtZero: true,
-                min: 0,
-                max: Math.max(5, maxValue),
-                ticks: { stepSize, callback: (v: any) => v },
-              },
-              y: {
-                grid: { display: false },
-                ticks: {
-                  callback: (v: any, idx: number) => ellipsisLabel(chartData.labels[idx], 10),
-                  maxRotation: 45,
-                  minRotation: 0,
-                  autoSkip: false,
-                },
-              },
-            },
-      };
-    }
-
-    return baseOptions;
+      } : {})
+    };
   }, [chartType, chartData.labels, chartData.values]);
 
-  // 차트 데이터 메모이제이션
-  const chartDataConfig = useMemo(() => {
-    const isMatrixChart = chartType === 'verticalMatrix' || chartType === 'horizontalMatrix';
-    if (!chartData.labels.length) {
-      return {
-        labels: [],
-        datasets: [{
-          data: [],
-          backgroundColor: [],
-          borderRadius: 0,
-          barPercentage: 0.75,
-          categoryPercentage: 0.85,
-        }]
-      };
-    }
-
-    // 실제 응답 인원수: props로 받거나, 없으면 value 합의 반올림(Math.round)
-    const totalResponses = respondentCount !== undefined ? respondentCount : Math.round(data.reduce((sum, item) => sum + item.value, 0));
-
-    // 문항 유형별 데이터/색상/비율 처리
-    let datasetData: number[] = [];
-    let backgroundColor: string[] = [];
-    if (questionType === 'multiple_select') {
-      // 복수응답: value 합 기준 100% 비율, 기타응답은 회색
-      const sum = data.reduce((acc, d) => acc + d.value, 0);
-      datasetData = sum ? chartData.values.map(v => Math.round((v / sum) * 1000) / 10) : chartData.values.map(() => 0);
-      backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : palette[i % palette.length]);
-    } else if (chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') {
-      // 행렬형: 실제 값(점수 등) 그대로, 전용 컬러 팔레트
-      datasetData = chartData.values;
-      backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : matrixColors[i % matrixColors.length]);
-    } else if (questionType === 'likert' || questionType === 'matrix') {
-      // 리커트: 응답자 수 기준 100% 비율, likertColors, 기타응답은 회색
-      datasetData = totalResponses ? chartData.values.map(v => Math.round((v / totalResponses) * 1000) / 10) : chartData.values.map(() => 0);
-      backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : likertColors[i % likertColors.length]);
-    } else {
-      // 객관식 등 기타: 응답자 수 기준 100% 비율, 자동 색상
-      datasetData = totalResponses ? chartData.values.map(v => Math.round((v / totalResponses) * 1000) / 10) : chartData.values.map(() => 0);
-      backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : generateColorSet(chartData.sortedData.length)[i]);
-    }
-
-    return {
-      labels: chartData.labels,
-      datasets: [{
-        data: datasetData,
-        backgroundColor,
-        borderRadius: 0,
-        barPercentage: 0.75,
-        categoryPercentage: 0.85,
-      }]
-    };
-  }, [chartType, chartData, data, questionType, respondentCount]);
+  // --- 차트 데이터 useMemo 분리 ---
+  const matrixChartDataConfig = useMemo(() => getMatrixChartData(chartData, data, respondentCount, matrixColors), [chartData, data, respondentCount]);
+  const generalChartDataConfig = useMemo(() => getGeneralChartData(chartData, data, questionType, respondentCount, palette, likertColors, generateColorSet), [chartData, data, questionType, respondentCount]);
 
   // 차트 컴포넌트 렌더링
-  console.log('chartDataConfig', chartDataConfig);
+  console.log('chartDataConfig', generalChartDataConfig);
   console.log('props.data', data);
-  if (chartDataConfig.datasets && chartDataConfig.datasets[0]) {
-    console.log('chartDataConfig.datasets[0].data', chartDataConfig.datasets[0].data);
+  if (generalChartDataConfig.datasets && generalChartDataConfig.datasets[0]) {
+    console.log('chartDataConfig.datasets[0].data', generalChartDataConfig.datasets[0].data);
   }
   const renderChart = () => {
+    const isMatrixChart = chartType === 'verticalMatrix' || chartType === 'horizontalMatrix';
+    if (isMatrixChart) {
+      return (
+        <Bar
+          ref={chartRef}
+          data={matrixChartDataConfig}
+          options={matrixChartOptions as ChartOptions<'bar'>}
+        />
+      );
+    }
     if (chartType === 'vertical' || chartType === 'horizontal') {
       return (
         <Bar
           ref={chartRef}
-          data={chartDataConfig}
-          options={chartOptions as ChartOptions<'bar'>}
+          data={generalChartDataConfig}
+          options={generalChartOptions as ChartOptions<'bar'>}
         />
       );
     }
-    
-    if (chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') {
-      return (
-        <Bar
-          ref={chartRef}
-          data={chartDataConfig}
-          options={chartOptions as ChartOptions<'bar'>}
-        />
-      );
-    }
-
     if (chartType === 'pie') {
       return (
         <Pie
           ref={chartRef}
-          data={chartDataConfig}
-          options={chartOptions as ChartOptions<'pie'>}
+          data={generalChartDataConfig}
+          options={generalChartOptions as ChartOptions<'pie'>}
         />
       );
     }
-
     if (chartType === 'donut') {
       return (
         <Doughnut
           ref={chartRef}
-          data={chartDataConfig}
-          options={chartOptions as ChartOptions<'doughnut'>}
+          data={generalChartDataConfig}
+          options={generalChartOptions as ChartOptions<'doughnut'>}
         />
       );
     }
-
     return null;
   };
 
