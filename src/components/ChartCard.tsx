@@ -35,21 +35,19 @@ interface ChartCardProps {
   responseOrder?: string[];
   scores?: number[];
   avgScore?: number | null;
+  headers?: string[];
+  questionRowIndex?: number;
+  onMoveUp?: () => void;
+  onMoveDown?: () => void;
 }
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend, Title);
 ChartJS.register(ChartDataLabels);
 
-const palette = [
-  '#1597B6', // 공격수
-  '#1CB5E0', // 미드필더
-  '#7F7FD5', // 수비수
-  '#B224EF', // 잘 모르겠음
-  '#F15BB5', // GK
-  '#E0E0E0', // 기타응답(회색)
-];
+// 기타응답 전용 회색 (모든 그래프에서 동일하게 사용, 다른 팔레트에는 절대 포함 X)
+const OTHER_GRAY = '#B0B0B0';
 
-// 리커트/행렬형 전용 색상 (이미지 기준)
+// 리커트/행렬형 전용 색상 (기존 유지)
 const likertColors = [
   '#2563eb', // 매우만족(5점)
   '#60a5fa', // 만족(4점)
@@ -58,18 +56,44 @@ const likertColors = [
   '#f43f5e', // 매우불만족(1점)
 ];
 
-// 행렬형 전용 컬러 팔레트 (예시)
+// 행렬형 전용 컬러 팔레트 (녹색/민트/청록 계열, 회색 제외)
 const matrixColors = [
-  '#7F7FD5', // 보라
-  '#86A8E7', // 연보라
-  '#91EAE4', // 민트
-  '#F7971E', // 주황
-  '#FFD200', // 노랑
-  '#F44369', // 핑크
   '#43E97B', // 연두
   '#38F9D7', // 청록
-  '#E0E0E0', // 기타응답(회색)
+  '#00B894', // 진한 민트
+  '#00CEC9', // 밝은 청록
+  '#0984E3', // 선명한 파랑
+  '#6C5CE7', // 보라
+  '#00BFAE', // 진한 청록
+  '#1DE9B6', // 밝은 민트
 ];
+
+// 객관식 전용 컬러 팔레트 (보라/핑크/남색/자주/청보라 등, 회색 제외)
+const objectiveColors = [
+  '#8E44AD', // 진보라
+  '#6C3483', // 자주
+  '#BB8FCE', // 연보라
+  '#F1948A', // 연핑크
+  '#D35400', // 진한 오렌지
+  '#F7CA18', // 노랑
+  '#5D6D7E', // 남색
+  '#154360', // 진한 남색
+];
+
+// 복수응답 전용 컬러 팔레트 (오렌지/노랑/갈색/베이지/레드오렌지 등, 회색 제외)
+const multiSelectColors = [
+  '#F39C12', // 오렌지
+  '#E67E22', // 진한 오렌지
+  '#CA6F1E', // 갈색
+  '#F6E58D', // 연노랑
+  '#F9CA24', // 노랑
+  '#F8C471', // 베이지
+  '#B9770E', // 진한 갈색
+  '#FAD7A0', // 연베이지
+];
+
+// 기존 palette는 객관식에만 사용하도록 변경
+const palette = objectiveColors;
 
 // 숫자 3자리마다 콤마를 찍는 함수
 function formatNumber(n: number) {
@@ -82,10 +106,12 @@ function ellipsisLabel(label: string, max = 10) {
 }
 
 // 기존 palette가 부족할 때 자동으로 색상 생성
-function generateColorSet(n: number) {
+function generateColorSet(n: number, baseColors: string[]) {
+  // baseColors에서 OTHER_GRAY를 제외하고 n개만큼 반복
+  const filtered = baseColors.filter(c => c.toLowerCase() !== OTHER_GRAY.toLowerCase());
   const colors = [];
   for (let i = 0; i < n; i++) {
-    colors.push(`hsl(${(i * 360) / n}, 70%, 60%)`);
+    colors.push(filtered[i % filtered.length]);
   }
   return colors;
 }
@@ -110,10 +136,11 @@ function getMatrixChartData(
   chartData: { labels: string[]; values: number[]; sortedData: { isOther?: boolean }[] },
   data: Response[],
   respondentCount: number | undefined,
-  matrixColors: string[]
+  matrixColors: string[],
+  barThickness: number
 ) {
   const datasetData = chartData.values;
-  const backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : matrixColors[i % matrixColors.length]);
+  const backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? OTHER_GRAY : matrixColors[i % matrixColors.length]);
   return {
     labels: chartData.labels,
     datasets: [{
@@ -122,6 +149,7 @@ function getMatrixChartData(
       borderRadius: 0,
       barPercentage: 0.75,
       categoryPercentage: 0.85,
+      barThickness,
     }]
   };
 }
@@ -133,7 +161,8 @@ function getGeneralChartData(
   respondentCount: number | undefined,
   palette: string[],
   likertColors: string[],
-  generateColorSet: (n: number) => string[]
+  generateColorSet: (n: number, baseColors: string[]) => string[],
+  barThickness: number
 ) {
   const totalResponses = respondentCount !== undefined ? respondentCount : Math.round(data.reduce((sum, item) => sum + item.value, 0));
   let datasetData: number[] = [];
@@ -141,13 +170,13 @@ function getGeneralChartData(
   if (questionType === 'multiple_select') {
     const sum = data.reduce((acc, d) => acc + d.value, 0);
     datasetData = sum ? chartData.values.map(v => Math.round((v / sum) * 1000) / 10) : chartData.values.map(() => 0);
-    backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : palette[i % palette.length]);
+    backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? OTHER_GRAY : generateColorSet(chartData.sortedData.length, multiSelectColors)[i]);
   } else if (questionType === 'likert' || questionType === 'matrix') {
     datasetData = totalResponses ? chartData.values.map(v => Math.round((v / totalResponses) * 1000) / 10) : chartData.values.map(() => 0);
-    backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : likertColors[i % likertColors.length]);
+    backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? OTHER_GRAY : likertColors[i % likertColors.length]);
   } else {
     datasetData = totalResponses ? chartData.values.map(v => Math.round((v / totalResponses) * 1000) / 10) : chartData.values.map(() => 0);
-    backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : generateColorSet(chartData.sortedData.length)[i]);
+    backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? OTHER_GRAY : generateColorSet(chartData.sortedData.length, objectiveColors)[i]);
   }
   return {
     labels: chartData.labels,
@@ -157,8 +186,47 @@ function getGeneralChartData(
       borderRadius: 0,
       barPercentage: 0.75,
       categoryPercentage: 0.85,
+      barThickness,
     }]
   };
+}
+
+// --- 스택형(전체 누적) 차트 데이터 생성 함수 ---
+function getStackedChartData(
+  chartData: { labels: string[]; values: number[]; sortedData: { isOther?: boolean; label: string; value: number }[] },
+  respondentCount: number | undefined,
+  palette: string[],
+  barThickness: number,
+  barPercentage: number,
+  categoryPercentage: number
+) {
+  // labels: [질문 텍스트 1개]
+  // datasets: 각 응답 옵션별로 하나씩, 값은 비율(%)
+  const total = respondentCount || chartData.values.reduce((a, b) => a + b, 0);
+  return {
+    labels: [''], // x축(세로) 또는 y축(가로)에 카테고리 1개만
+    datasets: chartData.sortedData.map((d, i) => ({
+      label: d.label,
+      data: [total ? Math.round((d.value / total) * 1000) / 10 : 0],
+      backgroundColor: d.isOther ? OTHER_GRAY : palette[i % palette.length],
+      borderRadius: 0,
+      barPercentage,
+      categoryPercentage,
+      barThickness,
+    }))
+  };
+}
+
+// barThickness 디폴트 계산 함수
+function getDefaultBarThickness(chartType: ChartType, dataLen: number) {
+  if (chartType === 'verticalStacked' || chartType === 'horizontalStacked') return 65;
+  if (chartType === 'vertical' || chartType === 'horizontal') return 54;
+  if (chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') {
+    // 데이터 개수에 따라 자동(최소 30, 최대 90, 300/개수)
+    if (!dataLen || dataLen <= 0) return 54;
+    return Math.max(30, Math.min(90, Math.floor(300 / dataLen)));
+  }
+  return 54;
 }
 
 const ChartCard: React.FC<ChartCardProps> = ({
@@ -181,9 +249,29 @@ const ChartCard: React.FC<ChartCardProps> = ({
   responseOrder,
   scores,
   avgScore,
+  headers,
+  questionRowIndex,
+  onMoveUp,
+  onMoveDown,
 }) => {
   const [dataTableOpen, setDataTableOpen] = useState(false);
   const chartRef = useRef<any>(null);
+  // --- y축 최대값 상태 (모든 Bar 계열) ---
+  const getDefaultYMax = () => {
+    if (questionType === 'multiple' || questionType === 'likert') return 100;
+    return 'auto';
+  };
+  const [customYMax, setCustomYMax] = useState<'auto' | 100 | 50>(getDefaultYMax());
+  // questionType이 바뀔 때 디폴트값도 갱신
+  React.useEffect(() => {
+    setCustomYMax(getDefaultYMax());
+  }, [questionType]);
+
+  const [barThickness, setBarThickness] = useState<number>(() => getDefaultBarThickness(chartType, data?.length || 0));
+  // 차트 유형/데이터 개수 변경 시 디폴트값 자동 적용
+  React.useEffect(() => {
+    setBarThickness(getDefaultBarThickness(chartType, data?.length || 0));
+  }, [chartType, data?.length]);
 
   // 차트 데이터 메모이제이션
   const chartData = useMemo(() => {
@@ -220,11 +308,11 @@ const ChartCard: React.FC<ChartCardProps> = ({
     if (colors && colors.length > 0) {
       backgroundColors = colors.slice(0, sortedData.length);
     } else if (chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') {
-      backgroundColors = sortedData.map((d, i) => d.isOther ? '#E0E0E0' : matrixColors[i % matrixColors.length]);
+      backgroundColors = sortedData.map((d, i) => d.isOther ? OTHER_GRAY : matrixColors[i % matrixColors.length]);
     } else if (questionType === 'likert' || questionType === 'matrix') {
-      backgroundColors = sortedData.map((d, i) => d.isOther ? '#E0E0E0' : likertColors[i % likertColors.length]);
+      backgroundColors = sortedData.map((d, i) => d.isOther ? OTHER_GRAY : likertColors[i % likertColors.length]);
     } else {
-      backgroundColors = sortedData.map((d, i) => d.isOther ? '#E0E0E0' : generateColorSet(sortedData.length)[i]);
+      backgroundColors = sortedData.map((d, i) => d.isOther ? OTHER_GRAY : generateColorSet(sortedData.length, objectiveColors)[i]);
     }
 
     return {
@@ -304,6 +392,18 @@ const ChartCard: React.FC<ChartCardProps> = ({
   }, [chartType, chartData.labels, chartData.values]);
 
   const generalChartOptions = useMemo(() => {
+    // Bar 계열일 때 y축 최대값 동적 적용
+    let yMax = 100;
+    const isBarType = chartType === 'vertical' || chartType === 'horizontal' || chartType === 'verticalStacked' || chartType === 'horizontalStacked' || chartType === 'verticalMatrix' || chartType === 'horizontalMatrix';
+    if (isBarType) {
+      if (customYMax === 'auto') {
+        const maxVal = Math.max(...chartData.values, 0);
+        yMax = Math.ceil(maxVal * 1.1 / 10) * 10; // 최대값+10%에서 10단위 올림
+        if (yMax < 10) yMax = 10;
+      } else {
+        yMax = customYMax;
+      }
+    }
     return {
       responsive: true,
       maintainAspectRatio: false,
@@ -324,9 +424,9 @@ const ChartCard: React.FC<ChartCardProps> = ({
           formatter: (value: number) => value === undefined || value === null ? '' : `${formatNumber(value)}%`,
         }
       },
-      ...(chartType === 'vertical' || chartType === 'horizontal' ? {
-        indexAxis: chartType === 'vertical' ? 'x' : 'y',
-        scales: chartType === 'vertical'
+      ...(isBarType ? {
+        indexAxis: chartType === 'vertical' || chartType === 'verticalStacked' || chartType === 'verticalMatrix' ? 'x' : 'y',
+        scales: chartType === 'vertical' || chartType === 'verticalStacked' || chartType === 'verticalMatrix'
           ? {
               x: {
                 grid: { display: true, drawOnChartArea: true, color: '#e5e7eb' },
@@ -337,10 +437,10 @@ const ChartCard: React.FC<ChartCardProps> = ({
                   autoSkip: false,
                 },
               },
-              y: { beginAtZero: true, max: 100, ticks: { callback: (v: any) => `${v}%` } },
+              y: { beginAtZero: true, max: yMax, ticks: { callback: (v: any) => `${v}%` } },
             }
           : {
-              x: { beginAtZero: true, max: 100, ticks: { callback: (v: any) => `${v}%` } },
+              x: { beginAtZero: true, max: yMax, ticks: { callback: (v: any) => `${v}%` } },
               y: {
                 grid: { display: true, drawOnChartArea: true, color: '#e5e7eb' },
                 ticks: {
@@ -353,11 +453,59 @@ const ChartCard: React.FC<ChartCardProps> = ({
             },
       } : {})
     };
-  }, [chartType, chartData.labels, chartData.values]);
+  }, [chartType, chartData.labels, chartData.values, questionType, customYMax]);
 
   // --- 차트 데이터 useMemo 분리 ---
-  const matrixChartDataConfig = useMemo(() => getMatrixChartData(chartData, data, respondentCount, matrixColors), [chartData, data, respondentCount]);
-  const generalChartDataConfig = useMemo(() => getGeneralChartData(chartData, data, questionType, respondentCount, palette, likertColors, generateColorSet), [chartData, data, questionType, respondentCount]);
+  const matrixChartDataConfig = useMemo(() => getMatrixChartData(chartData, data, respondentCount, matrixColors, barThickness), [chartData, data, respondentCount, barThickness]);
+  const generalChartDataConfig = useMemo(() => getGeneralChartData(chartData, data, questionType, respondentCount, palette, likertColors, generateColorSet, barThickness), [chartData, data, questionType, respondentCount, barThickness]);
+  const stackedChartDataConfig = useMemo(() => {
+    let colorSet = palette;
+    if (questionType === 'likert' || questionType === 'matrix') {
+      colorSet = likertColors;
+    } else if (questionType === 'multiple') {
+      colorSet = objectiveColors;
+    } else if (questionType === 'multiple_select') {
+      colorSet = multiSelectColors;
+    }
+    // 전체 누적형만 barPercentage/categoryPercentage 40% 감소
+    const barP = 0.45, catP = 0.51;
+    return getStackedChartData(chartData, respondentCount, colorSet, barThickness, barP, catP);
+  }, [chartData, respondentCount, questionType, barThickness]);
+
+  // --- 옵션 useMemo 분리 ---
+  const stackedChartOptions = useMemo(() => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: true, position: 'bottom', labels: { boxWidth: 12, padding: 15 } },
+      tooltip: { enabled: true, padding: 10, backgroundColor: 'rgba(0, 0, 0, 0.8)' },
+      title: { display: false },
+      datalabels: {
+        display: true,
+        color: '#000',
+        font: { weight: 'bold' },
+        anchor: 'center',
+        align: 'center',
+        formatter: (value: number) => value === undefined || value === null ? '' : `${formatNumber(value)}%`,
+      }
+    },
+    indexAxis: chartType === 'verticalStacked' ? 'x' : 'y',
+    scales: chartType === 'verticalStacked'
+      ? {
+          x: { stacked: true, grid: { display: true, color: '#e5e7eb' }, ticks: { display: false } },
+          y: { stacked: true, beginAtZero: true, max: 100, ticks: { callback: (v: any) => `${v}%` } },
+        }
+      : {
+          x: { stacked: true, beginAtZero: true, max: 100, ticks: { callback: (v: any) => `${v}%` } },
+          y: { stacked: true, grid: { display: true, color: '#e5e7eb' }, ticks: { display: false } },
+        },
+  }), [chartType]);
+
+  const defaultThickness = getDefaultBarThickness(chartType, data?.length || 0);
+  let barThicknessOptions = Array.from({length: 10}, (_, i) => 30 + i * 10); // [30,40,...,120]
+  if (!barThicknessOptions.includes(defaultThickness)) {
+    barThicknessOptions = [defaultThickness, ...barThicknessOptions];
+  }
 
   // 차트 컴포넌트 렌더링
   console.log('chartDataConfig', generalChartDataConfig);
@@ -373,6 +521,15 @@ const ChartCard: React.FC<ChartCardProps> = ({
           ref={chartRef}
           data={matrixChartDataConfig}
           options={matrixChartOptions as ChartOptions<'bar'>}
+        />
+      );
+    }
+    if (chartType === 'verticalStacked' || chartType === 'horizontalStacked') {
+      return (
+        <Bar
+          ref={chartRef}
+          data={stackedChartDataConfig}
+          options={stackedChartOptions as ChartOptions<'bar'>}
         />
       );
     }
@@ -408,32 +565,47 @@ const ChartCard: React.FC<ChartCardProps> = ({
 
   const chartMaxWidth = chartData.labels.length >= 7 ? 'max-w-[600px]' : 'max-w-[420px]';
 
+  // 카드 및 그래프 높이/너비 동적 계산
+  const baseHeight = 350;
+  const chartHeight = baseHeight + (gridSize.h - 1) * 150; // h=1:350, h=2:500, h=3:650...
+  const cardMinHeight = chartHeight + 250; // 카드 전체 높이(그래프+옵션+여백 등)
+  const baseWidth = 420;
+  const chartWidth = baseWidth + (gridSize.w - 1) * 180; // w=1:420, w=2:600, w=3:780...
+
   // 모든 차트 타입에서 카드 레이아웃을 반환하도록 통일
   return (
-    <div className="bg-white border border-gray-300 rounded-lg shadow-lg ring-2 ring-blue-200 p-4 flex flex-col" style={{ minHeight: 600 }}>
+    <div className="bg-white border border-gray-300 rounded-lg shadow-lg ring-2 ring-blue-200 p-4 flex flex-col" style={{ minHeight: cardMinHeight }}>
       <div className="flex justify-between items-start mb-4">
-        <h3 className="text-lg font-semibold break-words">
-          {(chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') ? (() => {
-            // 1. matrixTitle이 있으면 그대로
-            if (matrixTitle && matrixTitle.trim().length > 0) return matrixTitle;
-            // 2. data의 첫 label에서 \n 앞(안내문) 추출
-            if (data && data.length > 0 && typeof data[0].label === 'string') {
-              const firstLabel = data[0].label;
-              const firstLine = firstLabel.split(/\r?\n/)[0].trim();
-              if (firstLine.length > 10) return firstLine;
+        <div className="flex-1">
+          {/* 헤더 정보가 있을 때만 제목 윗줄에 작게 표시 */}
+          {(() => {
+            let header = null;
+            if (typeof questionRowIndex === 'number' && questionRowIndex > 0 && headers && headers[Number(questionIndex)]) {
+              header = headers[Number(questionIndex)];
             }
-            // 3. 글자 단위 공통 prefix(10자 이상)
-            if (data && data.length > 1) {
-              const prefix = findCommonPrefix(data.map(d => d.label));
-              if (prefix.length > 10) return prefix;
-            }
-            // 4. 그래도 없으면
-            return '제목 없음';
-          })() : question}
-        </h3>
-        <div className="text-sm text-gray-600">
-          총 응답: {formatNumber(respondentCount || Math.round(data.reduce((sum, item) => sum + item.value, 0)))}개
+            return header ? <div className="text-xs text-gray-500 mb-1">[{header}]</div> : null;
+          })()}
+          <h3 className="text-lg font-semibold break-words">
+            {(() => {
+              // matrix chart는 기존대로
+              if (chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') {
+                if (matrixTitle && matrixTitle.trim().length > 0) return matrixTitle;
+                if (data && data.length > 0) {
+                  const labels = data.map(d => (typeof d.label === 'string' ? d.label : ''));
+                  const prefix = findCommonPrefix(labels);
+                  if (prefix.length > 10) return prefix;
+                }
+                return '제목 없음';
+              }
+              // 일반 chart: 헤더 정보 붙이기
+              return question;
+            })()}
+          </h3>
         </div>
+        {/* 총 응답 갯수: 제목 아래, 오른쪽 정렬, 작은 크기 */}
+      </div>
+      <div className="flex justify-end mb-2 -mt-2">
+        <span className="text-xs text-gray-500">총 응답: {formatNumber(respondentCount || Math.round(data.reduce((sum, item) => sum + item.value, 0)))}개</span>
       </div>
       {/* 평균 점수 표기 (리커트만) */}
       {questionType === 'likert' && typeof avgScore === 'number' && (
@@ -451,47 +623,79 @@ const ChartCard: React.FC<ChartCardProps> = ({
       )}
       {/* 차트 영역 */}
       <div className="mt-4 flex-1 flex items-center justify-center">
-        <div className={`w-full h-[350px] mx-auto ${chartMaxWidth}`}>
+        <div className="mx-auto" style={{ height: chartHeight, width: chartWidth, minWidth: 320, maxWidth: '100%' }}>
           {renderChart()}
         </div>
       </div>
       {/* --- 옵션/버튼 영역: 항상 카드 하단에 --- */}
-      <div className="flex flex-col md:flex-row md:items-center gap-2 mt-auto">
-        <div className="flex gap-2">
-          <select
-            value={chartType}
-            onChange={e => onChartTypeChange(e.target.value as ChartType)}
-            className="border rounded px-2 py-1 text-xs"
-          >
-            <option value="vertical">세로 비율</option>
-            <option value="horizontal">가로 비율</option>
-            <option value="verticalStacked">세로 전체 누적</option>
-            <option value="horizontalStacked">가로 전체 누적</option>
-            <option value="pie">원형</option>
-            <option value="donut">도넛형</option>
-            <option value="verticalMatrix">세로 비율(행렬형)</option>
-            <option value="horizontalMatrix">가로 비율(행렬형)</option>
-          </select>
-          <select
-            value={questionType}
-            onChange={e => onQuestionTypeChange(e.target.value as QuestionTypeValue)}
-            className="border rounded px-2 py-1 text-xs"
-          >
-            <option value="likert">리커트 척도</option>
-            <option value="multiple">객관식</option>
-            <option value="multiple_select">복수응답</option>
-            <option value="open">주관식</option>
-            <option value="matrix">행렬형</option>
-          </select>
-        </div>
-        <div className="flex gap-1">
-          <button onClick={() => onGridSizeChange({ ...gridSize, w: gridSize.w - 1 })} className="text-xs px-1">◀</button>
-          <button onClick={() => onGridSizeChange({ ...gridSize, w: gridSize.w + 1 })} className="text-xs px-1">▶</button>
-          <button onClick={() => onGridSizeChange({ ...gridSize, h: gridSize.h - 1 })} className="text-xs px-1">▲</button>
-          <button onClick={() => onGridSizeChange({ ...gridSize, h: gridSize.h + 1 })} className="text-xs px-1">▼</button>
-          {onDuplicate && <button onClick={onDuplicate} className="text-xs px-1 text-blue-500">복제</button>}
-          {onDelete && <button onClick={onDelete} className="text-xs px-1 text-red-500">삭제</button>}
-        </div>
+      {/* 1줄(상단): 드롭다운 메뉴 + 순서변경 */}
+      <div className="flex flex-row flex-wrap items-center gap-1 mt-auto mb-1">
+        <select
+          value={chartType}
+          onChange={e => onChartTypeChange(e.target.value as ChartType)}
+          className="border rounded px-1 py-0.5 text-[11px]"
+        >
+          <option value="vertical">세로 비율</option>
+          <option value="horizontal">가로 비율</option>
+          <option value="verticalStacked">세로 전체 누적</option>
+          <option value="horizontalStacked">가로 전체 누적</option>
+          <option value="pie">원형</option>
+          <option value="donut">도넛형</option>
+          <option value="verticalMatrix">세로 비율(행렬형)</option>
+          <option value="horizontalMatrix">가로 비율(행렬형)</option>
+        </select>
+        <select
+          value={questionType}
+          onChange={e => onQuestionTypeChange(e.target.value as QuestionTypeValue)}
+          className="border rounded px-1 py-0.5 text-[11px]"
+        >
+          <option value="likert">리커트 척도</option>
+          <option value="multiple">객관식</option>
+          <option value="multiple_select">복수응답</option>
+          <option value="open">주관식</option>
+          <option value="matrix">행렬형</option>
+        </select>
+        {(chartType === 'vertical' || chartType === 'horizontal' || chartType === 'verticalStacked' || chartType === 'horizontalStacked' || chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') && (
+          <div className="flex items-center gap-1 text-[11px]">
+            <span>y축</span>
+            <select
+              value={customYMax}
+              onChange={e => setCustomYMax(e.target.value as 'auto' | 100 | 50)}
+              className="border rounded px-1 py-0.5 text-[11px]"
+            >
+              <option value="auto">자동</option>
+              <option value={100}>100</option>
+              <option value={50}>50</option>
+            </select>
+            <span>막대 두께</span>
+            <select
+              value={barThickness}
+              onChange={e => setBarThickness(Number(e.target.value))}
+              className="border rounded px-1 py-0.5 text-[11px]"
+            >
+              {barThicknessOptions.map(val => (
+                <option
+                  key={val}
+                  value={val}
+                  style={val === defaultThickness ? { color: '#2563eb', fontWeight: 600 } : {}}
+                >
+                  {val}px{val === defaultThickness ? ' (원본)' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        {/* 순서 변경 버튼 */}
+        {onMoveUp && <button onClick={onMoveUp} className="text-xs px-1 text-blue-500 hover:text-blue-700" title="카드 위로 이동">▲</button>}
+        {onMoveDown && <button onClick={onMoveDown} className="text-xs px-1 text-blue-500 hover:text-blue-700" title="카드 아래로 이동">▼</button>}
+      </div>
+      {/* 2줄(하단): 크기조절/삭제/데이터테이블 */}
+      <div className="flex flex-row flex-wrap items-center gap-1 mb-1">
+        <button onClick={() => onGridSizeChange({ ...gridSize, w: gridSize.w - 1 })} className="text-xs px-1">◀</button>
+        <button onClick={() => onGridSizeChange({ ...gridSize, w: gridSize.w + 1 })} className="text-xs px-1">▶</button>
+        <button onClick={() => onGridSizeChange({ ...gridSize, h: gridSize.h - 1 })} className="text-xs px-1">▲</button>
+        <button onClick={() => onGridSizeChange({ ...gridSize, h: gridSize.h + 1 })} className="text-xs px-1">▼</button>
+        {onDelete && <button onClick={onDelete} className="text-xs px-1 text-red-500">삭제</button>}
         <button
           onClick={() => setDataTableOpen(open => !open)}
           className="text-xs bg-gray-100 text-gray-700 rounded px-2 py-0.5"

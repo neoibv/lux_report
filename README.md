@@ -15,9 +15,14 @@
 npm install
 ```
 
-### 2. 개발 서버 실행
+### 2. 개발 서버 실행 (Vite)
 ```bash
-npm start
+npm run dev
+```
+
+### 3. 빌드 (배포용)
+```bash
+npm run build
 ```
 
 ## 프로젝트 구조
@@ -42,6 +47,7 @@ survey-insight/
 - Tailwind CSS
 - Chart.js
 - Zustand (상태 관리)
+- **Vite** (CRA → Vite로 마이그레이션)
 
 ## 기타
 - 자세한 제품 요구사항은 [PRD.md](./PRD.md)를 참고해주세요.

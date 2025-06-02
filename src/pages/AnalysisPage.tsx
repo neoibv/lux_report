@@ -45,17 +45,20 @@ const chartTypes = [
 const typeLabels = {
   likert: '리커트 척도',
   multiple: '객관식',
-  open: '주관식',
   matrix: '행렬형',
-  multiple_select: '복수 응답'
+  multiple_select: '복수 응답',
+  open: '주관식'
 };
 const typeColors = {
-  likert: 'text-blue-800',
-  multiple: 'text-green-800',
-  open: 'text-yellow-800',
-  matrix: 'text-purple-800',
-  multiple_select: 'text-orange-800'
+  likert: { text: 'text-blue-800', border: 'border-blue-200', bg: 'bg-blue-50' },
+  multiple: { text: 'text-green-800', border: 'border-green-200', bg: 'bg-green-50' },
+  matrix: { text: 'text-purple-800', border: 'border-purple-200', bg: 'bg-purple-50' },
+  multiple_select: { text: 'text-orange-800', border: 'border-orange-200', bg: 'bg-orange-50' },
+  open: { text: 'text-yellow-800', border: 'border-yellow-200', bg: 'bg-yellow-50' }
 };
+
+// 문항 유형 표시 순서 정의
+const typeOrder = ['likert', 'multiple', 'matrix', 'multiple_select', 'open'];
 
 // 공통 prefix 찾기 (글자 단위, fallback용)
 const findCommonPrefix = (strings: string[]) => {
@@ -121,6 +124,17 @@ const AnalysisPage: React.FC = () => {
     acc[type].push(q);
     return acc;
   }, {});
+
+  // 전체 선택(주관식, 행렬형 제외) 체크박스 상태
+  const nonSubjectiveIndexes = filteredQuestions.filter(qt => qt.type !== 'open' && qt.type !== 'matrix').map(qt => qt.columnIndex);
+  const allNonSubjectiveSelected = nonSubjectiveIndexes.length > 0 && nonSubjectiveIndexes.every(idx => selectedQuestions.includes(idx));
+  const handleSelectAllNonSubjective = () => {
+    if (allNonSubjectiveSelected) {
+      setSelectedQuestions(prev => prev.filter(idx => !nonSubjectiveIndexes.includes(idx)));
+    } else {
+      setSelectedQuestions(nonSubjectiveIndexes);
+    }
+  };
 
   // 그래프 생성
   const handleCreateCharts = () => {
@@ -361,6 +375,8 @@ const AnalysisPage: React.FC = () => {
 
     console.log('handleCreateCharts - 생성된 차트:', newCharts);
     setCharts(prev => [...prev, ...newCharts.filter(nc => !prev.some(c => c.questionIndex === nc.questionIndex))]);
+    // 그래프 생성 후 선택 해제
+    setSelectedQuestions([]);
   };
 
   // 그래프 삭제
@@ -411,15 +427,46 @@ const AnalysisPage: React.FC = () => {
     setSelectedQuestions(prev => prev.includes(colIdx) ? prev.filter(i => i !== colIdx) : [...prev, colIdx]);
   };
 
-  // 전체 선택(주관식 제외) 체크박스 상태
-  const nonSubjectiveIndexes = filteredQuestions.filter(qt => qt.type !== 'open').map(qt => qt.columnIndex);
-  const allNonSubjectiveSelected = nonSubjectiveIndexes.length > 0 && nonSubjectiveIndexes.every(idx => selectedQuestions.includes(idx));
-  const handleSelectAllNonSubjective = () => {
-    if (allNonSubjectiveSelected) {
-      setSelectedQuestions(prev => prev.filter(idx => !nonSubjectiveIndexes.includes(idx)));
-    } else {
-      setSelectedQuestions(nonSubjectiveIndexes);
+  // 이미 그래프로 렌더링된 문항인지 확인하는 함수
+  const isQuestionRendered = (columnIndex: number) => {
+    const question = surveyData.questions[columnIndex];
+    if (question?.type === 'matrix' && question?.matrixGroupId !== undefined) {
+      return charts.some(c => String(c.questionIndex) === `matrix_${question.matrixGroupId}`);
     }
+    return charts.some(c => String(c.questionIndex) === String(columnIndex));
+  };
+
+  // 텍스트 색상 결정 함수
+  const getQuestionTextColor = (type: keyof typeof typeColors, columnIndex: number) => {
+    const baseColor = typeColors[type];
+    if (isQuestionRendered(columnIndex)) {
+      return 'text-gray-400'; // 이미 렌더링된 문항은 회색으로
+    }
+    return baseColor;
+  };
+
+  // 카드 위치 이동 함수
+  const moveChart = (qIdx: number, direction: 'up' | 'down') => {
+    setCharts(prev => {
+      const idx = prev.findIndex(c => c.questionIndex === qIdx);
+      if (idx === -1) return prev;
+      const newCharts = [...prev];
+      if (direction === 'up' && idx > 0) {
+        [newCharts[idx - 1], newCharts[idx]] = [newCharts[idx], newCharts[idx - 1]];
+      } else if (direction === 'down' && idx < prev.length - 1) {
+        [newCharts[idx], newCharts[idx + 1]] = [newCharts[idx + 1], newCharts[idx]];
+      }
+      return newCharts;
+    });
+  };
+
+  // 반드시 surveyData 선언 이후에 위치
+  const getHeaderForColumn = (colIdx: number) => {
+    if (!surveyData || !surveyData.headers || typeof surveyData.questionRowIndex !== 'number') return null;
+    if (surveyData.questionRowIndex > 0 && surveyData.headers[colIdx]) {
+      return surveyData.headers[colIdx];
+    }
+    return null;
   };
 
   return (
@@ -467,7 +514,7 @@ const AnalysisPage: React.FC = () => {
             onChange={e => setSearch(e.target.value)}
           />
           
-          {/* 전체 선택(주관식 제외) 체크박스 */}
+          {/* 전체 선택(주관식, 행렬형 제외) 체크박스 */}
           <div className="flex items-center mb-2">
             <input
               type="checkbox"
@@ -475,11 +522,13 @@ const AnalysisPage: React.FC = () => {
               onChange={handleSelectAllNonSubjective}
               className="mr-2"
             />
-            <span className="text-sm">전체 선택(주관식 제외)</span>
+            <span className="text-sm">전체 선택(주관식, 행렬형 제외)</span>
           </div>
 
-          <div className="flex-1 overflow-y-auto">
-            {Object.entries(groupedQuestions).map(([type, questions]) => {
+          <div className="flex-1 overflow-y-auto space-y-4">
+            {typeOrder.map(type => {
+              const questions = groupedQuestions[type] || [];
+              if (questions.length === 0) return null;
               const t = type as keyof typeof typeLabels;
               let qs = questions as any[];
               // 행렬형(matrix) 문항은 matrixGroupId별로 묶어서 표현
@@ -493,9 +542,9 @@ const AnalysisPage: React.FC = () => {
                   }
                 });
                 return (
-                  <div key={type} className="mb-4">
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${typeColors[t]}`}>{typeLabels[t]}</span>
+                  <div key={type} className={`rounded-lg border-2 ${typeColors[t].border} ${typeColors[t].bg} p-3`}>
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className={`text-base font-semibold ${typeColors[t].text}`}>{typeLabels[t]}</span>
                       <span className="text-xs text-gray-500">{qs.length}개</span>
                     </div>
                     {Object.entries(matrixGroups).map(([groupId, groupQs]) => {
@@ -527,7 +576,6 @@ const AnalysisPage: React.FC = () => {
                             <span className="text-xs text-gray-500">세트 전체 선택</span>
                           </div>
                           {groupQs.map((qt: any) => {
-                            // commonPrefix 제외 뒷부분만 추출
                             const fullText = surveyData.questions[qt.columnIndex]?.text || '';
                             let diff = fullText.startsWith(commonPrefix) ? fullText.slice(commonPrefix.length).trim() : fullText;
                             if (!diff) diff = fullText;
@@ -541,10 +589,13 @@ const AnalysisPage: React.FC = () => {
                                   style={{ opacity: 0.5, pointerEvents: 'none' }}
                                 />
                                 <span
-                                  className={`text-sm truncate cursor-pointer ${typeColors[t]}`}
+                                  className={`text-sm truncate cursor-pointer ${isQuestionRendered(qt.columnIndex) ? 'text-gray-400' : 'text-gray-900'}`}
                                   title={fullText}
                                   style={{ maxWidth: '600px', width: '90%', display: 'inline-block', verticalAlign: 'middle' }}
                                 >
+                                  {getHeaderForColumn(qt.columnIndex) && (
+                                    <span className="text-xs text-gray-500 mr-1">[{getHeaderForColumn(qt.columnIndex)}]</span>
+                                  )}
                                   {diff}
                                 </span>
                               </div>
@@ -556,28 +607,23 @@ const AnalysisPage: React.FC = () => {
                   </div>
                 );
               }
-              // ... 나머지 유형 기존대로 ...
-              // 그룹 전체 선택 여부
-              const allGroupSelected = qs.length > 0 && qs.every(qt => selectedQuestions.includes(qt.columnIndex));
-              const handleGroupSelect = () => {
-                if (allGroupSelected) {
-                  setSelectedQuestions(prev => prev.filter(idx => !qs.some(qt => qt.columnIndex === idx)));
-                } else {
-                  setSelectedQuestions(prev => [
-                    ...prev,
-                    ...qs.map(qt => qt.columnIndex).filter(idx => !prev.includes(idx))
-                  ]);
-                }
-              };
+              // 일반 문항 처리
               return (
-                <div key={type} className="mb-4">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${typeColors[t]}`}>{typeLabels[t]}</span>
+                <div key={type} className={`rounded-lg border-2 ${typeColors[t].border} ${typeColors[t].bg} p-3`}>
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className={`text-base font-semibold ${typeColors[t].text}`}>{typeLabels[t]}</span>
                     <span className="text-xs text-gray-500">{qs.length}개</span>
                     <input
                       type="checkbox"
-                      checked={allGroupSelected}
-                      onChange={handleGroupSelect}
+                      checked={qs.length > 0 && qs.every(qt => selectedQuestions.includes(qt.columnIndex))}
+                      onChange={() => {
+                        if (qs.length > 0) {
+                          setSelectedQuestions(prev => [
+                            ...prev,
+                            ...qs.map(qt => qt.columnIndex).filter(idx => !prev.includes(idx))
+                          ]);
+                        }
+                      }}
                       className="ml-2"
                     />
                     <span className="text-xs text-gray-500">전체 선택</span>
@@ -590,10 +636,13 @@ const AnalysisPage: React.FC = () => {
                         onChange={() => handleSelectOne(qt.columnIndex)}
                       />
                       <span
-                        className={`text-sm truncate cursor-pointer ${typeColors[t]}`}
+                        className={`text-sm truncate cursor-pointer ${isQuestionRendered(qt.columnIndex) ? 'text-gray-400' : 'text-gray-900'}`}
                         title={surveyData.questions[qt.columnIndex]?.text || ''}
                         style={{ maxWidth: '600px', width: '90%', display: 'inline-block', verticalAlign: 'middle' }}
                       >
+                        {getHeaderForColumn(qt.columnIndex) && (
+                          <span className="text-xs text-gray-500 mr-1">[{getHeaderForColumn(qt.columnIndex)}]</span>
+                        )}
                         {surveyData.questions[qt.columnIndex]?.text || ''}
                       </span>
                     </div>
@@ -612,7 +661,7 @@ const AnalysisPage: React.FC = () => {
           </div>
           
           {/* 그래프 결과/카드 영역 */}
-          <div className="flex-1 overflow-y-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="flex-1 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             {charts.map(c => (
               <div
                 key={c.questionIndex}
@@ -638,6 +687,10 @@ const AnalysisPage: React.FC = () => {
                   onDuplicate={() => handleDuplicateChart(c.questionIndex)}
                   onDelete={() => handleDeleteChart(c.questionIndex)}
                   avgScore={c.avgScore}
+                  headers={surveyData.headers}
+                  questionRowIndex={surveyData.questionRowIndex}
+                  onMoveUp={() => moveChart(c.questionIndex, 'up')}
+                  onMoveDown={() => moveChart(c.questionIndex, 'down')}
                 />
               </div>
             ))}

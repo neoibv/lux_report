@@ -22,7 +22,7 @@ const Layout = ({ children }: LayoutProps) => {
             <div className="flex">
               <div className="flex-shrink-0 flex items-center">
                 <h1 className="text-2xl font-bold bg-gradient-to-r from-indigo-600 to-blue-500 bg-clip-text text-transparent drop-shadow-sm">
-                  SURVEY INSIGHT
+                  Survey Insight
                 </h1>
               </div>
               <div className="hidden sm:ml-6 sm:flex sm:space-x-8">

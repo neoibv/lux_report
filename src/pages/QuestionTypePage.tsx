@@ -871,30 +871,45 @@ const QuestionTypePage: React.FC = () => {
   const renderQuestionList = (questions: Question[], title: string, type: QuestionTypeValue) => {
     if (questions.length === 0) return null;
     const colors = typeColors[type];
+    // 헤더 정보 접근
+    const headers = surveyData?.headers;
+    const questionRowIndex = surveyData?.questionRowIndex;
 
     return (
       <div className="mb-8">
         <h2 className={`text-xl font-semibold mb-4 ${colors.title}`}>{title}</h2>
         <div className={`bg-white rounded-lg shadow p-6 ${colors.border} border-2`}>
           <div className="space-y-6">
-            {questions.map(question => (
-              <div key={question.id} className="flex items-start justify-between">
-                <div className="flex-1">
-                  <p className={`${colors.text}`}>{question.text}</p>
-                  <ResponseOptions question={question} />
+            {questions.map(question => {
+              // question.id에서 인덱스 추출 (예: q3 -> 3)
+              let colIdx = -1;
+              if (question.id && question.id.startsWith('q')) {
+                const idx = parseInt(question.id.substring(1));
+                if (!isNaN(idx)) colIdx = idx;
+              }
+              const header = (typeof questionRowIndex === 'number' && questionRowIndex > 0 && headers && headers[colIdx]) ? headers[colIdx] : null;
+              return (
+                <div key={question.id} className="flex items-start justify-between">
+                  <div className="flex-1">
+                    {header && (
+                      <div className="text-xs text-gray-500 mb-0.5">[{header}]</div>
+                    )}
+                    <p className={`${colors.text}`}>{question.text}</p>
+                    <ResponseOptions question={question} />
+                  </div>
+                  <div className="ml-4">
+                    <QuestionTypeSelector
+                      questionType={question.type}
+                      onTypeChange={(type) => handleQuestionTypeChange(question.id, type)}
+                    />
+                  </div>
                 </div>
-                <div className="ml-4">
-                  <QuestionTypeSelector
-                    questionType={question.type}
-                    onTypeChange={(type) => handleQuestionTypeChange(question.id, type)}
-                  />
-                </div>
-              </div>
-              ))}
-            </div>
+              );
+            })}
+          </div>
         </div>
-        </div>
-      );
+      </div>
+    );
   };
 
   if (!surveyData) {
@@ -944,23 +959,35 @@ const QuestionTypePage: React.FC = () => {
                   </div>
                   <MatrixResponseOptions group={group} />
                   <div className="mt-4 space-y-4">
-                    {group.questions.map(question => (
-                      <div key={question.id} className="flex items-center justify-between">
-                        <div className="flex-1">
-                          <p className={typeColors.matrix.text}>{question.text}</p>
+                    {group.questions.map(question => {
+                      // question.id에서 인덱스 추출 (예: q3 -> 3)
+                      let colIdx = -1;
+                      if (question.id && question.id.startsWith('q')) {
+                        const idx = parseInt(question.id.substring(1));
+                        if (!isNaN(idx)) colIdx = idx;
+                      }
+                      const header = (typeof surveyData?.questionRowIndex === 'number' && surveyData?.questionRowIndex > 0 && surveyData?.headers && surveyData?.headers[colIdx]) ? surveyData.headers[colIdx] : null;
+                      return (
+                        <div key={question.id} className="flex items-center justify-between">
+                          <div className="flex-1">
+                            {header && (
+                              <div className="text-xs text-gray-500 mb-0.5">[{header}]</div>
+                            )}
+                            <p className={typeColors.matrix.text}>{question.text}</p>
+                          </div>
+                          <div className="ml-4">
+                            <QuestionTypeSelector
+                              questionType={question.type}
+                              onTypeChange={(type) => handleMatrixQuestionTypeChange(group.id, question.id, type)}
+                            />
+                          </div>
                         </div>
-                        <div className="ml-4">
-                          <QuestionTypeSelector
-                            questionType={question.type}
-                            onTypeChange={(type) => handleMatrixQuestionTypeChange(group.id, question.id, type)}
-                          />
-                        </div>
-                      </div>
-                    ))}
-              </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
           </div>
         )}
 
