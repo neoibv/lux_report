@@ -57,7 +57,7 @@ const typeColors = {
   multiple_select: 'text-orange-800'
 };
 
-// 공통 prefix 찾기
+// 공통 prefix 찾기 (글자 단위, fallback용)
 const findCommonPrefix = (strings: string[]) => {
   if (strings.length === 0) return '';
   const first = strings[0];
@@ -158,13 +158,24 @@ const AnalysisPage: React.FC = () => {
             columnIndex: Number(surveyData.questions.findIndex((x: any) => x.id === qq.id)),
             ...(qq.scores ? { scores: qq.scores } : {})
           }));
-        // 공통 prefix 추출
-        const questionTexts = groupQs.map((q: any) => q.text || '');
-        const commonPrefix = findCommonPrefix(questionTexts);
+        // 안내문(첫 줄) 추출 및 공통 안내문 판별
+        const firstLines = groupQs.map((q: any) => (q.text || '').split(/\r?\n/)[0].trim());
+        let matrixTitle = '';
+        if (firstLines.length > 0 && firstLines.every(line => line === firstLines[0] && line.length > 0)) {
+          matrixTitle = firstLines[0];
+        } else {
+          // 글자 단위 공통 prefix(10자 이상)
+          const prefix = findCommonPrefix(groupQs.map((q: any) => q.text || ''));
+          if (prefix.length > 10) {
+            matrixTitle = prefix;
+          } else {
+            matrixTitle = '제목 없음';
+          }
+        }
         // 각 소문항별(문항별) 평균점수 계산 및 뒷부분 텍스트 추출
         const averages = groupQs.map((mq: any) => {
           const fullText = mq.text || '';
-          const diff = fullText.startsWith(commonPrefix) ? fullText.slice(commonPrefix.length).trim() : fullText;
+          const diff = fullText.startsWith(matrixTitle) ? fullText.slice(matrixTitle.length).trim() : fullText;
           const values = processedRows.map((row: any[]) => row[Number(mq.columnIndex)])
             .filter((v: any) => typeof v === 'string' && v.trim() !== '') as string[];
           // 자동 scoreMap 생성
@@ -183,11 +194,6 @@ const AnalysisPage: React.FC = () => {
             totalScore += score;
             totalCount += 1;
           });
-          if (scoreMap) {
-            console.log('matrix scoreMap:', scoreMap);
-            console.log('matrix 응답값:', values);
-            console.log('matrix 평균점수:', totalCount > 0 ? Math.round((totalScore / totalCount) * 100) / 100 : 0);
-          }
           return {
             label: diff,
             value: totalCount > 0 ? Math.round((totalScore / totalCount) * 100) / 100 : 0,
@@ -208,7 +214,7 @@ const AnalysisPage: React.FC = () => {
           gridSize: { w: 1, h: 1 },
           data: averages, // [{label: 소문항, value: 평균점수}]
           respondentCount,
-          matrixTitle: commonPrefix, // 제목
+          matrixTitle, // 제목
           yMax: 5, // y축 최대값
           ...(qt?.scores ? { scores: qt.scores } : {}),
           avgScore: avgScore // matrix는 개별 소문항별로 value에 평균점수 포함, 카드에서 value 사용

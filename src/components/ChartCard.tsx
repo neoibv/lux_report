@@ -58,6 +58,19 @@ const likertColors = [
   '#f43f5e', // 매우불만족(1점)
 ];
 
+// 행렬형 전용 컬러 팔레트 (예시)
+const matrixColors = [
+  '#7F7FD5', // 보라
+  '#86A8E7', // 연보라
+  '#91EAE4', // 민트
+  '#F7971E', // 주황
+  '#FFD200', // 노랑
+  '#F44369', // 핑크
+  '#43E97B', // 연두
+  '#38F9D7', // 청록
+  '#E0E0E0', // 기타응답(회색)
+];
+
 // 숫자 3자리마다 콤마를 찍는 함수
 function formatNumber(n: number) {
   return n.toLocaleString('ko-KR');
@@ -75,6 +88,21 @@ function generateColorSet(n: number) {
     colors.push(`hsl(${(i * 360) / n}, 70%, 60%)`);
   }
   return colors;
+}
+
+// 공통 prefix 추출 함수 (fallback용)
+function findCommonPrefix(strings: string[]) {
+  if (strings.length === 0) return '';
+  const first = strings[0];
+  let prefix = '';
+  for (let i = 0; i < first.length; i++) {
+    if (strings.every(s => s[i] === first[i])) {
+      prefix += first[i];
+    } else {
+      break;
+    }
+  }
+  return prefix;
 }
 
 const ChartCard: React.FC<ChartCardProps> = ({
@@ -135,14 +163,12 @@ const ChartCard: React.FC<ChartCardProps> = ({
     let backgroundColors;
     if (colors && colors.length > 0) {
       backgroundColors = colors.slice(0, sortedData.length);
+    } else if (chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') {
+      backgroundColors = sortedData.map((d, i) => d.isOther ? '#E0E0E0' : matrixColors[i % matrixColors.length]);
     } else if (questionType === 'likert' || questionType === 'matrix') {
-      backgroundColors = sortedData.map((d, i) => 
-        d.isOther ? '#E0E0E0' : likertColors[i % likertColors.length]
-      );
+      backgroundColors = sortedData.map((d, i) => d.isOther ? '#E0E0E0' : likertColors[i % likertColors.length]);
     } else {
-      backgroundColors = sortedData.map((d, i) => 
-        d.isOther ? '#E0E0E0' : generateColorSet(sortedData.length)[i]
-      );
+      backgroundColors = sortedData.map((d, i) => d.isOther ? '#E0E0E0' : generateColorSet(sortedData.length)[i]);
     }
 
     return {
@@ -151,7 +177,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
       backgroundColors,
       sortedData
     };
-  }, [data, colors, questionType]);
+  }, [data, colors, questionType, chartType]);
 
   // 차트 옵션 메모이제이션
   const chartOptions = useMemo(() => {
@@ -196,9 +222,16 @@ const ChartCard: React.FC<ChartCardProps> = ({
           },
           anchor: 'end',
           align: 'top',
-          formatter: (value: number) => {
+          formatter: (value: number, context: any) => {
             if (value === undefined || value === null) return '';
-            return isMatrixChart ? formatNumber(value) : `${formatNumber(value)}%`;
+            // 행렬형 차트는 값만, 그 외는 기존대로
+            if (chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') {
+              return formatNumber(value);
+            } else {
+              const label = chartData.labels[context.dataIndex];
+              const shortLabel = ellipsisLabel(label, 10);
+              return `${shortLabel}: ${formatNumber(value)}%`;
+            }
           }
         }
       }
@@ -250,7 +283,15 @@ const ChartCard: React.FC<ChartCardProps> = ({
         indexAxis: chartType === 'verticalMatrix' ? 'x' as const : 'y' as const,
         scales: chartType === 'verticalMatrix'
           ? {
-              x: { grid: { display: false } },
+              x: {
+                grid: { display: false },
+                ticks: {
+                  callback: (v: any, idx: number) => ellipsisLabel(chartData.labels[idx], 10),
+                  maxRotation: 45,
+                  minRotation: 0,
+                  autoSkip: false,
+                },
+              },
               y: {
                 beginAtZero: true,
                 min: 0,
@@ -265,7 +306,15 @@ const ChartCard: React.FC<ChartCardProps> = ({
                 max: Math.max(5, maxValue),
                 ticks: { stepSize, callback: (v: any) => v },
               },
-              y: { grid: { display: false } },
+              y: {
+                grid: { display: false },
+                ticks: {
+                  callback: (v: any, idx: number) => ellipsisLabel(chartData.labels[idx], 10),
+                  maxRotation: 45,
+                  minRotation: 0,
+                  autoSkip: false,
+                },
+              },
             },
       };
     }
@@ -300,19 +349,18 @@ const ChartCard: React.FC<ChartCardProps> = ({
       const sum = data.reduce((acc, d) => acc + d.value, 0);
       datasetData = sum ? chartData.values.map(v => Math.round((v / sum) * 1000) / 10) : chartData.values.map(() => 0);
       backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : palette[i % palette.length]);
+    } else if (chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') {
+      // 행렬형: 실제 값(점수 등) 그대로, 전용 컬러 팔레트
+      datasetData = chartData.values;
+      backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : matrixColors[i % matrixColors.length]);
     } else if (questionType === 'likert' || questionType === 'matrix') {
-      // 리커트/행렬형: 응답자 수 기준 100% 비율, likertColors, 기타응답은 회색
+      // 리커트: 응답자 수 기준 100% 비율, likertColors, 기타응답은 회색
       datasetData = totalResponses ? chartData.values.map(v => Math.round((v / totalResponses) * 1000) / 10) : chartData.values.map(() => 0);
       backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : likertColors[i % likertColors.length]);
     } else {
       // 객관식 등 기타: 응답자 수 기준 100% 비율, 자동 색상
       datasetData = totalResponses ? chartData.values.map(v => Math.round((v / totalResponses) * 1000) / 10) : chartData.values.map(() => 0);
       backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? '#E0E0E0' : generateColorSet(chartData.sortedData.length)[i]);
-    }
-
-    // 행렬형 차트는 실제 값(점수 등) 그대로 사용
-    if (isMatrixChart) {
-      datasetData = chartData.values;
     }
 
     return {
@@ -383,13 +431,31 @@ const ChartCard: React.FC<ChartCardProps> = ({
   return (
     <div className="bg-white border border-gray-300 rounded-lg shadow-lg ring-2 ring-blue-200 p-4 flex flex-col" style={{ minHeight: 600 }}>
       <div className="flex justify-between items-start mb-4">
-        <h3 className="text-lg font-semibold break-words">{matrixTitle || question}</h3>
+        <h3 className="text-lg font-semibold break-words">
+          {(chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') ? (() => {
+            // 1. matrixTitle이 있으면 그대로
+            if (matrixTitle && matrixTitle.trim().length > 0) return matrixTitle;
+            // 2. data의 첫 label에서 \n 앞(안내문) 추출
+            if (data && data.length > 0 && typeof data[0].label === 'string') {
+              const firstLabel = data[0].label;
+              const firstLine = firstLabel.split(/\r?\n/)[0].trim();
+              if (firstLine.length > 10) return firstLine;
+            }
+            // 3. 글자 단위 공통 prefix(10자 이상)
+            if (data && data.length > 1) {
+              const prefix = findCommonPrefix(data.map(d => d.label));
+              if (prefix.length > 10) return prefix;
+            }
+            // 4. 그래도 없으면
+            return '제목 없음';
+          })() : question}
+        </h3>
         <div className="text-sm text-gray-600">
           총 응답: {formatNumber(respondentCount || Math.round(data.reduce((sum, item) => sum + item.value, 0)))}개
         </div>
       </div>
-      {/* 평균 점수 표기 (리커트/행렬형) */}
-      {(questionType === 'likert' || questionType === 'matrix') && typeof avgScore === 'number' && (
+      {/* 평균 점수 표기 (리커트만) */}
+      {questionType === 'likert' && typeof avgScore === 'number' && (
         <div className={`w-full ${chartMaxWidth} mx-auto`}>
           <div className="mb-2 text-blue-700 font-bold text-base text-center">
             평균 점수: {avgScore} / 5점
