@@ -1,9 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import useSurveyStore from '../store/surveyStore';
 import ChartCard from '../components/ChartCard';
 import { LIKERT_SCALES, LikertScale } from '../utils/likertScales';
 import { ChartType, QuestionType, QuestionTypeValue } from '../types';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
+import ProgressOverlay from '../components/ProgressOverlay';
 
 // 복수응답 문항의 '_Others'를 '기타'로 묶어 카운팅하는 분석용 데이터 생성 함수
 function getProcessedRows(surveyData: any) {
@@ -14,7 +17,7 @@ function getProcessedRows(surveyData: any) {
   surveyData.questionTypes.forEach((qt: any) => {
     if (qt.type === 'multiple_select') {
       const colIdx = qt.columnIndex;
-      processedRows.forEach((prow: any[], i: number) => {
+      processedRows.forEach((prow: any[], i: any) => {
         const cell = prow[colIdx];
         if (typeof cell === 'string') {
           // 복수응답 구분자 '@@'로 분리
@@ -39,6 +42,8 @@ const chartTypes = [
   { value: 'donut', label: '도넛형' },
   { value: 'verticalMatrix', label: '세로 비율(행렬형)' },
   { value: 'horizontalMatrix', label: '가로 비율(행렬형)' },
+  { value: 'wordcloud', label: '워드 클라우드 (주관식)' },
+  { value: 'topN', label: '상위 키워드/문장 (주관식)' },
 ];
 
 // 유형별 라벨과 색상 정의 (QuestionTypePage.tsx와 동일하게)
@@ -75,7 +80,21 @@ const findCommonPrefix = (strings: string[]) => {
   return prefix;
 };
 
-const AnalysisPage: React.FC = () => {
+interface AnalysisState {
+  selectedQuestions: number[];
+  charts: any[];
+  selectedChartType: ChartType;
+  reportSelectedCharts: (string | number)[];
+}
+
+interface AnalysisPageProps {
+  analysisState: AnalysisState;
+  setAnalysisState: React.Dispatch<React.SetStateAction<AnalysisState>>;
+  reportState: any;
+  setReportState: React.Dispatch<React.SetStateAction<any>>;
+}
+
+const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisState, reportState, setReportState }) => {
   const navigate = useNavigate();
   const { surveyData } = useSurveyStore();
   // [검증3] 분석 페이지 진입 시 로그
@@ -83,23 +102,9 @@ const AnalysisPage: React.FC = () => {
     console.log('[검증3] 분석 페이지 진입 시 surveyData.questionTypes:', surveyData.questionTypes);
   }
   const [search, setSearch] = useState('');
-  const [selectedQuestions, setSelectedQuestions] = useState<number[]>([]);
-  const [selectedChartType, setSelectedChartType] = useState<ChartType>('vertical');
-  const [charts, setCharts] = useState<Array<{
-    questionIndex: number;
-    chartType: ChartType;
-    questionType: QuestionType;
-    gridSize: { w: number; h: number };
-    data: Array<{ label: string; value: number; isOther?: boolean }>;
-    colors?: string[];
-    respondentCount: number;
-    matrixTitle?: string;
-    scoreMap?: Record<string, number>;
-    responseOrder?: string[];
-    scores?: number[];
-    yMax: number;
-    avgScore: number;
-  }>>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [progressMsg, setProgressMsg] = useState('');
 
   if (!surveyData) {
     navigate('/upload');
@@ -111,7 +116,7 @@ const AnalysisPage: React.FC = () => {
 
   // 문항 필터링(검색)
   const filteredQuestions = surveyData.questions
-    .map((q: any, idx: number) => ({ ...q, columnIndex: idx }))
+    .map((q: any, idx: any) => ({ ...q, columnIndex: idx }))
     .filter((q: any) => {
       const qText = q.text || '';
       return qText.toLowerCase().includes(search.toLowerCase());
@@ -125,23 +130,45 @@ const AnalysisPage: React.FC = () => {
     return acc;
   }, {});
 
+  // selectedQuestions 중복 제거를 위한 useEffect
+  useEffect(() => {
+    if (analysisState.selectedQuestions.length !== new Set(analysisState.selectedQuestions).size) {
+      setAnalysisState((prev: AnalysisState) => ({
+        ...prev,
+        selectedQuestions: Array.from(new Set(prev.selectedQuestions))
+      }));
+    }
+  }, [analysisState.selectedQuestions]);
+
   // 전체 선택(주관식, 행렬형 제외) 체크박스 상태
   const nonSubjectiveIndexes = filteredQuestions.filter(qt => qt.type !== 'open' && qt.type !== 'matrix').map(qt => qt.columnIndex);
-  const allNonSubjectiveSelected = nonSubjectiveIndexes.length > 0 && nonSubjectiveIndexes.every(idx => selectedQuestions.includes(idx));
+  const allNonSubjectiveSelected = nonSubjectiveIndexes.length > 0 && nonSubjectiveIndexes.every(idx => analysisState.selectedQuestions.includes(idx));
   const handleSelectAllNonSubjective = () => {
     if (allNonSubjectiveSelected) {
-      setSelectedQuestions(prev => prev.filter(idx => !nonSubjectiveIndexes.includes(idx)));
+      setAnalysisState((prev: AnalysisState) => ({
+        ...prev,
+        selectedQuestions: prev.selectedQuestions.filter((idx: number) => !nonSubjectiveIndexes.includes(idx))
+      }));
     } else {
-      setSelectedQuestions(nonSubjectiveIndexes);
+      setAnalysisState((prev: AnalysisState) => ({
+        ...prev,
+        selectedQuestions: [
+          ...prev.selectedQuestions,
+          ...nonSubjectiveIndexes.filter((idx: number) => !prev.selectedQuestions.includes(idx))
+        ]
+      }));
     }
   };
 
   // 그래프 생성
   const handleCreateCharts = () => {
+    setIsLoading(true);
+    setProgress(0);
+    setProgressMsg('그래프 데이터 준비 중...');
     console.log('handleCreateCharts - 시작');
     console.log('handleCreateCharts - surveyData:', surveyData);
     console.log('handleCreateCharts - processedRows:', processedRows);
-    console.log('handleCreateCharts - selectedQuestions:', selectedQuestions);
+    console.log('handleCreateCharts - selectedQuestions:', analysisState.selectedQuestions);
     
     // matrixGroupId별로 그룹핑
     const matrixGroups: Record<number, any[]> = {};
@@ -155,7 +182,9 @@ const AnalysisPage: React.FC = () => {
     const newCharts: any[] = [];
     const usedMatrixGroups = new Set<string>();
 
-    selectedQuestions.forEach(qIdx => {
+    const total = analysisState.selectedQuestions.length;
+    let done = 0;
+    analysisState.selectedQuestions.forEach(qIdx => {
       // 항상 surveyData.questions에서 최신 정보 참조
       const q = surveyData.questions[qIdx];
       if (!q) return;
@@ -223,7 +252,7 @@ const AnalysisPage: React.FC = () => {
         let avgScore = averages[0].value;
         newCharts.push({
           questionIndex: `matrix_${qt.matrixGroupId}`,
-          chartType: selectedChartType,
+          chartType: analysisState.selectedChartType,
           questionType: { ...qt, type: 'matrix' },
           gridSize: { w: 1, h: 1 },
           data: averages, // [{label: 소문항, value: 평균점수}]
@@ -351,17 +380,23 @@ const AnalysisPage: React.FC = () => {
         respondentCount = values.length;
         responseOrder = qt.options;
       } else if (questionType === 'open') {
-        // 주관식: 응답자 수만 표시
-        respondentCount = processedRows.filter((row: any[]) => {
-          const value = row[qIdx];
-          return typeof value === 'string' && value.trim() !== '';
-        }).length;
-        chartData = [];
+        // 주관식: 모든 응답 텍스트를 data에 넣되, 5000개 초과 시 무작위 5000개만 추출
+        let values = processedRows.map((row: any[]) => row[qIdx])
+          .filter((v: any) => typeof v === 'string' && v.trim() !== '') as string[];
+        if (values.length > 5000) {
+          const shuffled = [...values].sort(() => Math.random() - 0.5);
+          values = shuffled.slice(0, 5000);
+        }
+        chartData = values.map((v: string) => ({
+          label: v,
+          value: 1
+        }));
+        respondentCount = values.length;
       }
 
       newCharts.push({
         questionIndex: qIdx,
-        chartType: selectedChartType, // 사용자가 선택한 차트 타입 사용
+        chartType: analysisState.selectedChartType, // 사용자가 선택한 차트 타입 사용
         questionType: { ...qt, type: questionType },
         gridSize: { w: 1, h: 1 },
         data: chartData,
@@ -371,73 +406,84 @@ const AnalysisPage: React.FC = () => {
         scores,
         avgScore: avgScore // 평균점수 명시적으로 전달
       });
+      done++;
+      setProgress(Math.round((done / total) * 100));
+      setProgressMsg(`그래프 생성 중... (${done}/${total})`);
     });
 
     console.log('handleCreateCharts - 생성된 차트:', newCharts);
-    setCharts(prev => [...prev, ...newCharts.filter(nc => !prev.some(c => c.questionIndex === nc.questionIndex))]);
+    setAnalysisState(prev => ({ ...prev, charts: [...prev.charts, ...newCharts.filter(nc => !prev.charts.some(c => c.questionIndex === nc.questionIndex))] }));
     // 그래프 생성 후 선택 해제
-    setSelectedQuestions([]);
+    setAnalysisState(prev => ({ ...prev, selectedQuestions: [] }));
+    setProgress(100);
+    setProgressMsg('그래프 생성 완료');
+    setTimeout(() => setIsLoading(false), 500);
   };
 
   // 그래프 삭제
-  const handleDeleteChart = (qIdx: number) => {
-    setCharts(prev => prev.filter(c => c.questionIndex !== qIdx));
+  const handleDeleteChart = (qIdx: any) => {
+    setAnalysisState(prev => ({ ...prev, charts: prev.charts.filter(c => c.questionIndex !== qIdx) }));
   };
 
   // 그래프 유형 개별 변경
-  const handleChartTypeChange = (qIdx: number, newType: ChartType) => {
-    setCharts(prev => prev.map(c => c.questionIndex === qIdx ? { ...c, chartType: newType } : c));
+  const handleChartTypeChange = (qIdx: any, newType: ChartType) => {
+    setAnalysisState(prev => ({
+      ...prev,
+      charts: prev.charts.map(c =>
+        c.questionIndex === qIdx ? { ...c, chartType: newType } : c
+      )
+    }));
   };
 
   // 문항 유형 변경
-  const handleQuestionTypeChange = (qIdx: number, newType: QuestionType) => {
-    setCharts(prev => prev.map(c => c.questionIndex === qIdx ? { ...c, questionType: newType } : c));
+  const handleQuestionTypeChange = (qIdx: any, newType: QuestionType) => {
+    setAnalysisState(prev => ({ ...prev, charts: prev.charts.map(c => c.questionIndex === qIdx ? { ...c, questionType: newType } : c) }));
   };
 
   // 데이터 테이블 편집
-  const handleDataTableEdit = (qIdx: number, newData: any[]) => {
-    setCharts(prev => prev.map(c => c.questionIndex === qIdx ? { ...c, data: newData } : c));
+  const handleDataTableEdit = (qIdx: any, newData: any[]) => {
+    setAnalysisState(prev => ({ ...prev, charts: prev.charts.map(c => c.questionIndex === qIdx ? { ...c, data: newData } : c) }));
   };
 
   // 카드 크기 변경
-  const handleGridSizeChange = (qIdx: number, newSize: { w: number; h: number }) => {
-    setCharts(prev => prev.map(c => c.questionIndex === qIdx ? { ...c, gridSize: newSize } : c));
+  const handleGridSizeChange = (qIdx: any, newSize: { w: number; h: number }) => {
+    setAnalysisState(prev => ({ ...prev, charts: prev.charts.map(c => c.questionIndex === qIdx ? { ...c, gridSize: newSize } : c) }));
   };
 
   // 카드 복제
-  const handleDuplicateChart = (qIdx: number) => {
-    const chartToDuplicate = charts.find(c => c.questionIndex === qIdx);
+  const handleDuplicateChart = (qIdx: any) => {
+    const chartToDuplicate = analysisState.charts.find(c => c.questionIndex === qIdx);
     if (chartToDuplicate) {
       const newChart = {
         ...chartToDuplicate,
         questionIndex: Date.now(), // 임시로 고유 ID 생성
       };
-      setCharts(prev => [...prev, newChart]);
+      setAnalysisState(prev => ({ ...prev, charts: [...prev.charts, newChart] }));
     }
   };
 
   // 보고서로 이동(목업)
-  const handleMoveToReport = (qIdx: number) => {
+  const handleMoveToReport = (qIdx: any) => {
     // TODO: 보고서 영역에 추가하는 로직 구현
     alert('보고서로 이동: ' + (surveyData.questions[qIdx] || '')); 
   };
 
   // 개별 문항 선택 함수 복구
-  const handleSelectOne = (colIdx: number) => {
-    setSelectedQuestions(prev => prev.includes(colIdx) ? prev.filter(i => i !== colIdx) : [...prev, colIdx]);
+  const handleSelectOne = (colIdx: any) => {
+    setAnalysisState(prev => ({ ...prev, selectedQuestions: prev.selectedQuestions.includes(colIdx) ? prev.selectedQuestions.filter(i => i !== colIdx) : [...prev.selectedQuestions, colIdx] }));
   };
 
   // 이미 그래프로 렌더링된 문항인지 확인하는 함수
-  const isQuestionRendered = (columnIndex: number) => {
+  const isQuestionRendered = (columnIndex: any) => {
     const question = surveyData.questions[columnIndex];
     if (question?.type === 'matrix' && question?.matrixGroupId !== undefined) {
-      return charts.some(c => String(c.questionIndex) === `matrix_${question.matrixGroupId}`);
+      return analysisState.charts.some(c => String(c.questionIndex) === `matrix_${question.matrixGroupId}`);
     }
-    return charts.some(c => String(c.questionIndex) === String(columnIndex));
+    return analysisState.charts.some(c => String(c.questionIndex) === String(columnIndex));
   };
 
   // 텍스트 색상 결정 함수
-  const getQuestionTextColor = (type: keyof typeof typeColors, columnIndex: number) => {
+  const getQuestionTextColor = (type: keyof typeof typeColors, columnIndex: any) => {
     const baseColor = typeColors[type];
     if (isQuestionRendered(columnIndex)) {
       return 'text-gray-400'; // 이미 렌더링된 문항은 회색으로
@@ -446,22 +492,22 @@ const AnalysisPage: React.FC = () => {
   };
 
   // 카드 위치 이동 함수
-  const moveChart = (qIdx: number, direction: 'up' | 'down') => {
-    setCharts(prev => {
-      const idx = prev.findIndex(c => c.questionIndex === qIdx);
+  const moveChart = (qIdx: any, direction: 'up' | 'down') => {
+    setAnalysisState(prev => {
+      const idx = prev.charts.findIndex(c => c.questionIndex === qIdx);
       if (idx === -1) return prev;
-      const newCharts = [...prev];
+      const newCharts = [...prev.charts];
       if (direction === 'up' && idx > 0) {
         [newCharts[idx - 1], newCharts[idx]] = [newCharts[idx], newCharts[idx - 1]];
-      } else if (direction === 'down' && idx < prev.length - 1) {
+      } else if (direction === 'down' && idx < prev.charts.length - 1) {
         [newCharts[idx], newCharts[idx + 1]] = [newCharts[idx + 1], newCharts[idx]];
       }
-      return newCharts;
+      return { ...prev, charts: newCharts };
     });
   };
 
   // 반드시 surveyData 선언 이후에 위치
-  const getHeaderForColumn = (colIdx: number) => {
+  const getHeaderForColumn = (colIdx: any) => {
     if (!surveyData || !surveyData.headers || typeof surveyData.questionRowIndex !== 'number') return null;
     if (surveyData.questionRowIndex > 0 && surveyData.headers[colIdx]) {
       return surveyData.headers[colIdx];
@@ -469,8 +515,90 @@ const AnalysisPage: React.FC = () => {
     return null;
   };
 
+  // PDF 다운로드 함수: 각 카드별 실제 DOM을 캡처하여 3열 그리드로 PDF에 배치 (gridSize 반영)
+  const handleDownloadPDF = async () => {
+    const selectedCharts = analysisState.charts.filter((c: any) => analysisState.reportSelectedCharts.includes(c.questionIndex));
+    if (selectedCharts.length === 0) return;
+
+    const pdf = new jsPDF('p', 'mm', 'a4');
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const margin = 15;
+    const contentWidth = pageWidth - margin * 2;
+    const colCount = 3;
+    const gap = 8; // 카드 간격(mm)
+    const cardWidth = (contentWidth - gap * (colCount - 1)) / colCount;
+
+    // 3열 그리드의 각 셀 점유 상태를 관리
+    let grid = [] as number[][]; // [row][col] = 1(점유)
+    let y = margin;
+    let row = 0;
+    let maxRowHeight = 0;
+
+    for (let i = 0; i < selectedCharts.length; i++) {
+      const chart = selectedCharts[i];
+      const chartId = `pdf-export-${chart.questionIndex}`;
+      const exportElem = document.getElementById(chartId);
+      if (!exportElem) continue;
+
+      const gridW = chart.gridSize?.w || 1;
+      const gridH = chart.gridSize?.h || 1;
+      const imgW = cardWidth * gridW + gap * (gridW - 1);
+
+      const canvas = await html2canvas(exportElem, { scale: 2, backgroundColor: '#fff', useCORS: true });
+      const imgData = canvas.toDataURL('image/png');
+      const imgProps = pdf.getImageProperties(imgData);
+      // 원본 비율 유지, gridH만큼 높이 확장
+      const baseImgH = (imgProps.height * imgW) / imgProps.width;
+      const imgH = baseImgH * gridH;
+
+      // 현재 row에서 연속 gridW만큼 비어있는 col 찾기
+      let col = 0;
+      let found = false;
+      while (!found) {
+        // grid[row]가 없으면 초기화
+        if (!grid[row]) grid[row] = Array(colCount).fill(0);
+        // col~col+gridW-1까지 비어있는지 확인
+        if (col + gridW <= colCount && grid[row].slice(col, col + gridW).every(v => v === 0)) {
+          found = true;
+          // 점유 표시
+          for (let k = 0; k < gridW; k++) grid[row][col + k] = 1;
+        } else {
+          col++;
+          if (col > colCount - 1) {
+            // 다음 row로
+            row++;
+            y += maxRowHeight + gap;
+            col = 0;
+            maxRowHeight = 0;
+          }
+        }
+      }
+
+      // 페이지 넘김 처리
+      if (y + imgH > pageHeight - margin) {
+        pdf.addPage();
+        y = margin;
+        row = 0;
+        col = 0;
+        grid = [];
+        maxRowHeight = 0;
+        // 다시 col~col+gridW-1 찾기
+        if (!grid[row]) grid[row] = Array(colCount).fill(0);
+        for (let k = 0; k < gridW; k++) grid[row][col + k] = 1;
+      }
+
+      const x = margin + col * (cardWidth + gap);
+      pdf.addImage(imgData, 'PNG', x, y, imgW, imgH);
+      if (imgH > maxRowHeight) maxRowHeight = imgH;
+    }
+
+    pdf.save('분석_그래프.pdf');
+  };
+
   return (
     <div className="flex w-screen absolute left-0 top-[64px] min-h-[calc(100vh-64px)] bg-gray-50">
+      <ProgressOverlay isOpen={isLoading} progress={progress} message={progressMsg} />
       <div className="flex w-screen px-4 py-4 gap-4">
         {/* 좌측: 문항 선택 패널 */}
         <aside className="w-[520px] bg-white rounded-lg shadow p-4 flex flex-col h-[calc(100vh-64px)]">
@@ -482,25 +610,36 @@ const AnalysisPage: React.FC = () => {
           {/* 그래프 설정/생성 영역 */}
           <div className="flex items-center gap-2 mb-4">
             <select
-              value={selectedChartType}
-              onChange={e => setSelectedChartType(e.target.value as ChartType)}
+              value={analysisState.selectedChartType}
+              onChange={e => setAnalysisState(prev => ({ ...prev, selectedChartType: e.target.value as ChartType }))}
               className="border rounded px-2 py-1 text-sm flex-1"
             >
-              {chartTypes.map(ct => (
-                <option key={ct.value} value={ct.value}>{ct.label}</option>
-              ))}
+              {chartTypes.map(ct => {
+                // 주관식용 옵션은 주관식 문항 선택 시에만 활성화
+                const isSubjective = ct.value === 'wordcloud' || ct.value === 'topN';
+                // 현재 선택된 문항이 모두 주관식일 때만 활성화
+                let allSelectedAreOpen = false;
+                if (analysisState.selectedQuestions.length > 0 && surveyData) {
+                  allSelectedAreOpen = analysisState.selectedQuestions.every(idx => surveyData.questions[idx]?.type === 'open');
+                }
+                return (
+                  <option key={ct.value} value={ct.value} disabled={isSubjective && !allSelectedAreOpen}>
+                    {ct.label}
+                  </option>
+                );
+              })}
             </select>
             <button
               onClick={handleCreateCharts}
               className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
-              disabled={selectedQuestions.length === 0}
+              disabled={analysisState.selectedQuestions.length === 0}
             >
               그래프 생성
             </button>
             <button
-              onClick={() => setCharts([])}
+              onClick={() => setAnalysisState(prev => ({ ...prev, charts: [] }))}
               className="px-3 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-xs"
-              disabled={charts.length === 0}
+              disabled={analysisState.charts.length === 0}
             >
               전체 삭제
             </button>
@@ -549,15 +688,21 @@ const AnalysisPage: React.FC = () => {
                     </div>
                     {Object.entries(matrixGroups).map(([groupId, groupQs]) => {
                       // 그룹 전체 선택 여부
-                      const allGroupSelected = groupQs.every((qt: any) => selectedQuestions.includes(qt.columnIndex));
+                      const allGroupSelected = groupQs.every((qt: any) => analysisState.selectedQuestions.includes(qt.columnIndex));
                       const handleGroupSelect = () => {
                         if (allGroupSelected) {
-                          setSelectedQuestions(prev => prev.filter(idx => !groupQs.some((qt: any) => qt.columnIndex === idx)));
-                        } else {
-                          setSelectedQuestions(prev => [
+                          setAnalysisState((prev: AnalysisState) => ({
                             ...prev,
-                            ...groupQs.map((qt: any) => qt.columnIndex).filter(idx => !prev.includes(idx))
-                          ]);
+                            selectedQuestions: prev.selectedQuestions.filter(idx => !groupQs.some((qt: any) => qt.columnIndex === idx))
+                          }));
+                        } else {
+                          setAnalysisState((prev: AnalysisState) => ({
+                            ...prev,
+                            selectedQuestions: [
+                              ...prev.selectedQuestions,
+                              ...groupQs.map((qt: any) => qt.columnIndex).filter(idx => !prev.selectedQuestions.includes(idx))
+                            ]
+                          }));
                         }
                       };
                       // 공통 접두사(문항 유형 검토에서 저장된 commonPrefix) 추출
@@ -583,7 +728,7 @@ const AnalysisPage: React.FC = () => {
                               <div key={qt.columnIndex} className="flex items-center mb-1 ml-4">
                                 <input
                                   type="checkbox"
-                                  checked={selectedQuestions.includes(qt.columnIndex)}
+                                  checked={analysisState.selectedQuestions.includes(qt.columnIndex)}
                                   readOnly
                                   disabled
                                   style={{ opacity: 0.5, pointerEvents: 'none' }}
@@ -615,13 +760,24 @@ const AnalysisPage: React.FC = () => {
                     <span className="text-xs text-gray-500">{qs.length}개</span>
                     <input
                       type="checkbox"
-                      checked={qs.length > 0 && qs.every(qt => selectedQuestions.includes(qt.columnIndex))}
+                      checked={qs.length > 0 && qs.every(qt => analysisState.selectedQuestions.includes(qt.columnIndex))}
                       onChange={() => {
                         if (qs.length > 0) {
-                          setSelectedQuestions(prev => [
-                            ...prev,
-                            ...qs.map(qt => qt.columnIndex).filter(idx => !prev.includes(idx))
-                          ]);
+                          const allSelected = qs.every(qt => analysisState.selectedQuestions.includes(qt.columnIndex));
+                          if (allSelected) {
+                            setAnalysisState((prev: AnalysisState) => ({
+                              ...prev,
+                              selectedQuestions: prev.selectedQuestions.filter(idx => !qs.some(qt => qt.columnIndex === idx))
+                            }));
+                          } else {
+                            setAnalysisState((prev: AnalysisState) => ({
+                              ...prev,
+                              selectedQuestions: [
+                                ...prev.selectedQuestions,
+                                ...qs.map(qt => qt.columnIndex).filter(idx => !prev.selectedQuestions.includes(idx))
+                              ]
+                            }));
+                          }
                         }
                       }}
                       className="ml-2"
@@ -632,7 +788,7 @@ const AnalysisPage: React.FC = () => {
                     <div key={qt.columnIndex} className="flex items-center mb-1 ml-4">
                       <input
                         type="checkbox"
-                        checked={selectedQuestions.includes(qt.columnIndex)}
+                        checked={analysisState.selectedQuestions.includes(qt.columnIndex)}
                         onChange={() => handleSelectOne(qt.columnIndex)}
                       />
                       <span
@@ -655,46 +811,99 @@ const AnalysisPage: React.FC = () => {
 
         {/* 우측: 그래프 결과 영역 */}
         <main className="flex-1 bg-white rounded-lg shadow p-4 flex flex-col min-w-0 h-[calc(100vh-64px)]">
-          <div className="mb-4">
-            <h2 className="text-lg font-bold">그래프 결과</h2>
-            <p className="text-sm text-gray-600">생성된 그래프가 여기에 표시됩니다.</p>
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-bold">그래프 결과</h2>
+              <p className="text-sm text-gray-600">생성된 그래프가 여기에 표시됩니다.</p>
+            </div>
+            <button
+              onClick={handleDownloadPDF}
+              className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-xs ml-4"
+              disabled={analysisState.reportSelectedCharts.length === 0}
+            >
+              PDF로 다운로드
+            </button>
           </div>
           
           {/* 그래프 결과/카드 영역 */}
+          <div className="flex items-center mb-2">
+            <input
+              type="checkbox"
+              className="mr-2"
+              checked={analysisState.charts.length > 0 && analysisState.charts.every((c: any) => analysisState.reportSelectedCharts.includes(c.questionIndex))}
+              onChange={() => {
+                const allSelected = analysisState.charts.length > 0 && analysisState.charts.every((c: any) => analysisState.reportSelectedCharts.includes(c.questionIndex));
+                if (allSelected) {
+                  setAnalysisState((prev: AnalysisState) => ({ ...prev, reportSelectedCharts: [] }));
+                } else {
+                  setAnalysisState((prev: AnalysisState) => ({ ...prev, reportSelectedCharts: prev.charts.map((c: any) => c.questionIndex) }));
+                }
+              }}
+            />
+            <span className="text-sm mr-4">전체 선택</span>
+            <button
+              className="px-3 py-1 bg-blue-500 text-white rounded disabled:bg-gray-300 mr-2"
+              disabled={analysisState.reportSelectedCharts.length === 0}
+              onClick={() => {
+                const selectedCharts = analysisState.charts.filter((c: any) => analysisState.reportSelectedCharts.includes(c.questionIndex));
+                setReportState((prev: any) => ({
+                  ...prev,
+                  reportItems: [
+                    ...prev.reportItems,
+                    ...selectedCharts.map((c: any) => ({
+                      ...c,
+                      description: '',
+                      question: surveyData.questions[c.questionIndex]?.text || '',
+                      headers: surveyData.headers || [],
+                      questionRowIndex: surveyData.questionRowIndex
+                    }))
+                  ]
+                }));
+                setAnalysisState((prev: AnalysisState) => ({ ...prev, reportSelectedCharts: [] }));
+              }}
+            >
+              보고서로 보내기
+            </button>
+            <span className="text-sm text-gray-500">선택된 그래프: {analysisState.reportSelectedCharts.length}개</span>
+          </div>
           <div className="flex-1 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {charts.map(c => (
-              <div
-                key={c.questionIndex}
-                style={{
-                  gridColumn: `span ${c.gridSize.w}`,
-                  gridRow: `span ${c.gridSize.h * 2}`
-                }}
-              >
-                <ChartCard
+            {analysisState.charts.map((c: any) => {
+              const isSelected = analysisState.reportSelectedCharts.includes(c.questionIndex);
+              return (
+                <div
+                  id={`pdf-export-${c.questionIndex}`}
                   key={c.questionIndex}
-                  questionIndex={String(c.questionIndex)}
-                  question={surveyData.questions[c.questionIndex]?.text || `문항 ${c.questionIndex + 1}`}
-                  questionType={c.questionType.type as QuestionTypeValue}
-                  chartType={c.chartType}
-                  data={c.data}
-                  colors={c.colors}
-                  respondentCount={c.respondentCount}
-                  onChartTypeChange={(newType) => handleChartTypeChange(c.questionIndex, newType)}
-                  onQuestionTypeChange={(newType) => handleQuestionTypeChange(c.questionIndex, { ...c.questionType, type: newType as QuestionTypeValue })}
-                  onDataTableEdit={(newData) => handleDataTableEdit(c.questionIndex, newData)}
-                  gridSize={c.gridSize}
-                  onGridSizeChange={(newSize) => handleGridSizeChange(c.questionIndex, newSize)}
-                  onDuplicate={() => handleDuplicateChart(c.questionIndex)}
-                  onDelete={() => handleDeleteChart(c.questionIndex)}
-                  avgScore={c.avgScore}
-                  headers={surveyData.headers}
-                  questionRowIndex={surveyData.questionRowIndex}
-                  onMoveUp={() => moveChart(c.questionIndex, 'up')}
-                  onMoveDown={() => moveChart(c.questionIndex, 'down')}
-                />
-              </div>
-            ))}
-            {charts.length === 0 && (
+                  style={{
+                    gridColumn: `span ${c.gridSize.w}`,
+                    gridRow: `span ${c.gridSize.h * 2}`
+                  }}
+                  className={`relative`}
+                >
+                  <ChartCard
+                    questionIndex={String(c.questionIndex)}
+                    question={surveyData.questions[c.questionIndex]?.text || `문항 ${c.questionIndex + 1}`}
+                    questionType={c.questionType.type as QuestionTypeValue}
+                    chartType={c.chartType}
+                    data={c.data}
+                    colors={c.colors}
+                    respondentCount={c.respondentCount}
+                    avgScore={c.avgScore}
+                    headers={surveyData.headers}
+                    questionRowIndex={surveyData.questionRowIndex}
+                    gridSize={c.gridSize}
+                    onChartTypeChange={(newType) => handleChartTypeChange(c.questionIndex, newType)}
+                    onQuestionTypeChange={(newType) => handleQuestionTypeChange(c.questionIndex, { ...c.questionType, type: newType as QuestionTypeValue })}
+                    onDataTableEdit={(newData) => handleDataTableEdit(c.questionIndex, newData)}
+                    onGridSizeChange={(newSize) => handleGridSizeChange(c.questionIndex, newSize)}
+                    onDuplicate={() => handleDuplicateChart(c.questionIndex)}
+                    onDelete={() => handleDeleteChart(c.questionIndex)}
+                    onMoveUp={() => moveChart(c.questionIndex, 'up')}
+                    onMoveDown={() => moveChart(c.questionIndex, 'down')}
+                  />
+                </div>
+              );
+            })}
+            {analysisState.charts.length === 0 && (
               <div className="col-span-full text-center text-gray-400 py-12">
                 <p className="mb-2">생성된 그래프가 없습니다.</p>
                 <p className="text-sm">왼쪽 패널에서 문항을 선택하고 그래프를 생성해주세요.</p>
@@ -707,4 +916,4 @@ const AnalysisPage: React.FC = () => {
   );
 };
 
-export default AnalysisPage; 
+export default AnalysisPage;

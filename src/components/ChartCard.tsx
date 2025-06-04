@@ -14,6 +14,9 @@ import {
 import { Bar, Pie, Doughnut } from 'react-chartjs-2';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
 import { ChartType, QuestionTypeValue, Response } from '../types';
+import WordCloudChart from './WordCloudChart';
+import TopNList from './TopNList';
+import ProgressOverlay from './ProgressOverlay';
 
 interface ChartCardProps {
   questionIndex: string;
@@ -39,6 +42,7 @@ interface ChartCardProps {
   questionRowIndex?: number;
   onMoveUp?: () => void;
   onMoveDown?: () => void;
+  pdfExportMode?: boolean;
 }
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend, Title);
@@ -47,11 +51,11 @@ ChartJS.register(ChartDataLabels);
 // 기타응답 전용 회색 (모든 그래프에서 동일하게 사용, 다른 팔레트에는 절대 포함 X)
 const OTHER_GRAY = '#B0B0B0';
 
-// 리커트/행렬형 전용 색상 (기존 유지)
+// 리커트/행렬형 전용 색상 (3점: 훨씬 옅은 노란색으로 변경)
 const likertColors = [
   '#2563eb', // 매우만족(5점)
   '#60a5fa', // 만족(4점)
-  '#fef08a', // 보통(3점)
+  '#FFF9C4', // 보통(3점) - 훨씬 옅은 노란색
   '#fca5a5', // 불만족(2점)
   '#f43f5e', // 매우불만족(1점)
 ];
@@ -232,6 +236,30 @@ function withRowId(arr: Array<{ label: string; value: number; isOther?: boolean;
   return arr.map((d, i) => ({ ...d, id: d.id ?? `row_${i}` }));
 }
 
+// --- 주관식 데이터에서 단어 빈도 추출 함수 ---
+function extractWordCounts(data: Response[]): { text: string; value: number }[] {
+  const wordMap: Record<string, number> = {};
+  data.forEach(d => {
+    // 한글, 영문 단어 단위로 분리
+    const words = (d.label || '').split(/\s+/).map(w => w.trim()).filter(Boolean);
+    words.forEach(word => {
+      if (!word) return;
+      wordMap[word] = (wordMap[word] || 0) + 1;
+    });
+  });
+  return Object.entries(wordMap).map(([text, value]) => ({ text, value }));
+}
+
+function extractSentenceCounts(data: Response[]): { text: string; value: number }[] {
+  const map: Record<string, number> = {};
+  data.forEach(d => {
+    const text = (d.label || '').trim();
+    if (!text) return;
+    map[text] = (map[text] || 0) + 1;
+  });
+  return Object.entries(map).map(([text, value]) => ({ text, value }));
+}
+
 const ChartCard: React.FC<ChartCardProps> = ({
   questionIndex,
   question,
@@ -256,6 +284,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
   questionRowIndex,
   onMoveUp,
   onMoveDown,
+  pdfExportMode,
 }) => {
   const [dataTableOpen, setDataTableOpen] = useState(false);
   const chartRef = useRef<any>(null);
@@ -270,13 +299,25 @@ const ChartCard: React.FC<ChartCardProps> = ({
     setCustomYMax(getDefaultYMax());
   }, [questionType]);
 
-  const [barThickness, setBarThickness] = useState<number>(() => getDefaultBarThickness(chartType, data?.length || 0));
+  // 데이터 개수가 7개 이상이면 자동으로 두께를 줄임
+  const getAutoBarThickness = (chartType: ChartType, dataLen: number) => {
+    if ((chartType === 'vertical' || chartType === 'horizontal') && dataLen >= 7) {
+      // 7개 이상이면 카드 영역에 맞게 40 이하로 자동 조정
+      return Math.max(24, Math.floor(320 / dataLen));
+    }
+    if ((chartType === 'verticalStacked' || chartType === 'horizontalStacked') && dataLen >= 7) {
+      return Math.max(24, Math.floor(320 / dataLen));
+    }
+    return getDefaultBarThickness(chartType, dataLen);
+  };
+
+  const [barThickness, setBarThickness] = useState<number>(() => getAutoBarThickness(chartType, data?.length || 0));
   // 차트 유형/데이터 개수 변경 시 디폴트값 자동 적용
   React.useEffect(() => {
-    setBarThickness(getDefaultBarThickness(chartType, data?.length || 0));
+    setBarThickness(getAutoBarThickness(chartType, data?.length || 0));
   }, [chartType, data?.length]);
 
-  // 차트 데이터 메모이제이션
+  // --- 차트 데이터 메모이제이션 ---
   const chartData = useMemo(() => {
     // 데이터가 없는 경우 빈 배열 반환
     if (!data || data.length === 0) {
@@ -303,10 +344,9 @@ const ChartCard: React.FC<ChartCardProps> = ({
       };
     }
 
+    // 반드시 sortedTableData 기준으로 labels, values, backgroundColors 생성
     const labels = sortedData.map(d => d.label);
     const values = sortedData.map(d => d.value);
-    
-    // 색상 설정
     let backgroundColors;
     if (colors && colors.length > 0) {
       backgroundColors = colors.slice(0, sortedData.length);
@@ -394,6 +434,72 @@ const ChartCard: React.FC<ChartCardProps> = ({
     };
   }, [chartType, chartData.labels, chartData.values]);
 
+  // --- 차트 데이터 useMemo 분리 ---
+  const [localTableData, setLocalTableData] = useState<Array<{ label: string; value: number; isOther?: boolean; id: string }>>(() => withRowId(data));
+  const [sortConfig, setSortConfig] = useState<{ key: 'label' | 'value' | 'percent'; direction: 'asc' | 'desc' } | null>(null);
+
+  // 정렬 함수
+  const handleSort = (key: 'label' | 'value' | 'percent') => {
+    setSortConfig(prev => {
+      if (prev && prev.key === key) {
+        // 같은 키면 방향 토글
+        return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+      }
+      return { key, direction: 'desc' };
+    });
+    const sorted = [...localTableData];
+    if (key === 'percent') {
+      sorted.sort((a, b) => getPercent(a.value) - getPercent(b.value));
+    } else {
+      sorted.sort((a, b) => {
+        if (key === 'label') return a.label.localeCompare(b.label);
+        return a.value - b.value;
+      });
+    }
+    if (sortConfig?.direction === 'desc') sorted.reverse();
+    setLocalTableData(sorted);
+  };
+
+  // 행 이동 함수 (localTableData의 실제 순서 기준으로 이동, sortedTableData는 화면 표시용)
+  const moveRow = (sortedIdx: number, direction: -1 | 1) => {
+    const row = sortedTableData[sortedIdx];
+    const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
+    const to = realIdx + direction;
+    if (to < 0 || to >= localTableData.length) return;
+    const arr = [...localTableData];
+    const [moved] = arr.splice(realIdx, 1);
+    arr.splice(to, 0, moved);
+    setLocalTableData(arr);
+  };
+
+  // 실제 정렬된 데이터
+  const sortedTableData = useMemo(() => {
+    if (!sortConfig) return localTableData;
+    const sorted = [...localTableData];
+    if (sortConfig.key === 'percent') {
+      sorted.sort((a, b) => getPercent(a.value) - getPercent(b.value));
+    } else {
+      sorted.sort((a, b) => {
+        if (sortConfig.key === 'label') return a.label.localeCompare(b.label);
+        return a.value - b.value;
+      });
+    }
+    if (sortConfig.direction === 'desc') sorted.reverse();
+    return sorted;
+  }, [localTableData, sortConfig]);
+
+  // label에 id를 붙여 Chart.js에 넘기기 (캐싱 문제 해결)
+  const chartLabels = sortedTableData.map(d => `${d.label}__${d.id}`);
+
+  // 총합 계산
+  const totalResponses = useMemo(() => localTableData.reduce((sum: number, item: { value: number }) => sum + item.value, 0), [localTableData]);
+
+  // getPercent 함수는 한 번만 선언하고, 모든 곳에서 재사용
+  const getPercent = (val: number) => {
+    if (!totalResponses || totalResponses === 0) return 0;
+    return Math.round((val / totalResponses) * 1000) / 10;
+  };
+
   const generalChartOptions = useMemo(() => {
     // Bar 계열일 때 y축 최대값 동적 적용
     let yMax = 100;
@@ -434,7 +540,11 @@ const ChartCard: React.FC<ChartCardProps> = ({
               x: {
                 grid: { display: true, drawOnChartArea: true, color: '#e5e7eb' },
                 ticks: {
-                  callback: (v: any, idx: number) => ellipsisLabel(chartData.labels[idx], 10),
+                  callback: (v: any, idx: number) => {
+                    // chartLabels에서 id 제거 후 표시
+                    const label = chartLabels[idx] || '';
+                    return ellipsisLabel(label.split('__')[0], 10);
+                  },
                   maxRotation: 45,
                   minRotation: 0,
                   autoSkip: false,
@@ -447,7 +557,10 @@ const ChartCard: React.FC<ChartCardProps> = ({
               y: {
                 grid: { display: true, drawOnChartArea: true, color: '#e5e7eb' },
                 ticks: {
-                  callback: (v: any, idx: number) => ellipsisLabel(chartData.labels[idx], 10),
+                  callback: (v: any, idx: number) => {
+                    const label = chartLabels[idx] || '';
+                    return ellipsisLabel(label.split('__')[0], 10);
+                  },
                   maxRotation: 45,
                   minRotation: 0,
                   autoSkip: false,
@@ -456,83 +569,14 @@ const ChartCard: React.FC<ChartCardProps> = ({
             },
       } : {})
     };
-  }, [chartType, chartData.labels, chartData.values, questionType, customYMax]);
+  }, [chartType, chartData.labels, chartData.values, questionType, customYMax, chartLabels]);
 
-  // --- 차트 데이터 useMemo 분리 ---
-  const [localTableData, setLocalTableData] = useState<Array<{ label: string; value: number; isOther?: boolean; id: string }>>(() => withRowId(data));
-  // 실제 차트에 반영되는 데이터
-  const [applyTableData, setApplyTableData] = useState<Array<{ label: string; value: number; isOther?: boolean; id: string }>>(() => withRowId(data));
-  // localTableData가 바뀔 때마다 applyTableData도 동기화
-  useEffect(() => {
-    setApplyTableData(localTableData);
-  }, [localTableData]);
-
-  // 정렬 상태
-  const [sortConfig, setSortConfig] = useState<{ key: 'label' | 'value' | 'percent'; direction: 'asc' | 'desc' } | null>(null);
-
-  // 총합 계산
-  const totalResponses = useMemo(() => localTableData.reduce((sum: number, item: { value: number }) => sum + item.value, 0), [localTableData]);
-
-  // getPercent 함수는 한 번만 선언하고, 모든 곳에서 재사용
-  const getPercent = (val: number) => {
-    if (!totalResponses || totalResponses === 0) return 0;
-    return Math.round((val / totalResponses) * 1000) / 10;
-  };
-
-  // 정렬 함수
-  const handleSort = (key: 'label' | 'value' | 'percent') => {
-    setSortConfig(prev => {
-      if (prev && prev.key === key) {
-        // 같은 키면 방향 토글
-        return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
-      }
-      return { key, direction: 'desc' };
-    });
-    // 정렬 후 바로 applyTableData 업데이트
-    const sorted = [...localTableData];
-    if (key === 'percent') {
-      sorted.sort((a, b) => getPercent(a.value) - getPercent(b.value));
-    } else {
-      sorted.sort((a, b) => {
-        if (key === 'label') return a.label.localeCompare(b.label);
-        return a.value - b.value;
-      });
-    }
-    if (sortConfig?.direction === 'desc') sorted.reverse();
-    setLocalTableData(sorted);
-  };
-
-  // 실제 정렬된 데이터
-  const sortedTableData = useMemo(() => {
-    if (!sortConfig) return localTableData;
-    const sorted = [...localTableData];
-    if (sortConfig.key === 'percent') {
-      sorted.sort((a, b) => getPercent(a.value) - getPercent(b.value));
-    } else {
-      sorted.sort((a, b) => {
-        if (sortConfig.key === 'label') return a.label.localeCompare(b.label);
-        return a.value - b.value;
-      });
-    }
-    if (sortConfig.direction === 'desc') sorted.reverse();
-    return sorted;
-  }, [localTableData, sortConfig]);
-
-  // 행 이동 함수 (localTableData의 실제 순서 기준으로 이동, sortedTableData는 화면 표시용)
-  const moveRow = (sortedIdx: number, direction: -1 | 1) => {
-    const row = sortedTableData[sortedIdx];
-    const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
-    const to = realIdx + direction;
-    if (to < 0 || to >= localTableData.length) return;
-    const arr = [...localTableData];
-    const [moved] = arr.splice(realIdx, 1);
-    arr.splice(to, 0, moved);
-    setLocalTableData(arr);
-  };
-
-  // 그래프 데이터 생성도 applyTableData만 사용
-  const matrixChartDataConfig = useMemo(() => getMatrixChartData(applyTableData, respondentCount, matrixColors, barThickness), [applyTableData, respondentCount, barThickness]);
-  const generalChartDataConfig = useMemo(() => getGeneralChartData(applyTableData, questionType, respondentCount, palette, likertColors, generateColorSet, barThickness), [applyTableData, questionType, respondentCount, barThickness]);
+  const matrixChartDataConfig = useMemo(() => getMatrixChartData(sortedTableData, respondentCount, matrixColors, barThickness), [sortedTableData, respondentCount, barThickness]);
+  const generalChartDataConfig = useMemo(() => {
+    // 기존 getGeneralChartData 내부에서 labels를 chartLabels로 대체
+    const base = getGeneralChartData(sortedTableData, questionType, respondentCount, palette, likertColors, generateColorSet, barThickness);
+    return { ...base, labels: chartLabels };
+  }, [sortedTableData, questionType, respondentCount, barThickness, chartLabels]);
   const stackedChartDataConfig = useMemo(() => {
     let colorSet = palette;
     if (questionType === 'likert' || questionType === 'matrix') {
@@ -543,8 +587,8 @@ const ChartCard: React.FC<ChartCardProps> = ({
       colorSet = multiSelectColors;
     }
     const barP = 0.45, catP = 0.51;
-    return getStackedChartData(applyTableData, respondentCount, colorSet, barThickness, barP, catP);
-  }, [applyTableData, respondentCount, questionType, barThickness]);
+    return getStackedChartData(sortedTableData, respondentCount, colorSet, barThickness, barP, catP);
+  }, [sortedTableData, respondentCount, questionType, barThickness]);
 
   // --- 옵션 useMemo 분리 ---
   const stackedChartOptions = useMemo(() => ({
@@ -582,16 +626,45 @@ const ChartCard: React.FC<ChartCardProps> = ({
   }
 
   // 차트 컴포넌트 렌더링
-  console.log('chartDataConfig', generalChartDataConfig);
-  console.log('props.data', data);
-  if (generalChartDataConfig.datasets && generalChartDataConfig.datasets[0]) {
-    console.log('chartDataConfig.datasets[0].data', generalChartDataConfig.datasets[0].data);
-  }
+  // 차트 데이터가 바뀔 때마다 강제 리렌더링을 위해 key를 부여
+  const chartKey = sortedTableData.map(d => d.id).join('-');
+  const [isChartLoading, setIsChartLoading] = React.useState(false);
+  const [chartProgress, setChartProgress] = React.useState(0);
+  const [chartMsg, setChartMsg] = React.useState('');
+  const [chartError, setChartError] = React.useState('');
+  const [chartRendered, setChartRendered] = React.useState(false);
+
+  // 워드클라우드/TopN 차트 렌더링 프로그레스 useEffect를 컴포넌트 최상단에서 관리
+  React.useEffect(() => {
+    if (questionType === 'open' && (chartType === 'wordcloud' as ChartType || chartType === 'topN' as ChartType)) {
+      if (!isChartLoading && !chartRendered) {
+        setIsChartLoading(true);
+        setChartProgress(10);
+        setChartMsg('주관식 데이터 처리 중...');
+        setChartError('');
+        const timer = setTimeout(() => {
+          setChartProgress(80);
+          setChartMsg('차트 시각화 중...');
+          setTimeout(() => {
+            setChartProgress(100);
+            setIsChartLoading(false);
+            setChartRendered(true);
+          }, 400);
+        }, 600);
+        return () => clearTimeout(timer);
+      }
+    } else {
+      setIsChartLoading(false);
+      setChartRendered(false);
+    }
+  }, [questionType, chartType, data]);
+
   const renderChart = () => {
     const isMatrixChart = chartType === 'verticalMatrix' || chartType === 'horizontalMatrix';
     if (isMatrixChart) {
       return (
         <Bar
+          key={chartKey}
           ref={chartRef}
           data={matrixChartDataConfig}
           options={matrixChartOptions as ChartOptions<'bar'>}
@@ -601,6 +674,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
     if (chartType === 'verticalStacked' || chartType === 'horizontalStacked') {
       return (
         <Bar
+          key={chartKey}
           ref={chartRef}
           data={stackedChartDataConfig}
           options={stackedChartOptions as ChartOptions<'bar'>}
@@ -610,6 +684,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
     if (chartType === 'vertical' || chartType === 'horizontal') {
       return (
         <Bar
+          key={chartKey}
           ref={chartRef}
           data={generalChartDataConfig}
           options={generalChartOptions as ChartOptions<'bar'>}
@@ -619,6 +694,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
     if (chartType === 'pie') {
       return (
         <Pie
+          key={chartKey}
           ref={chartRef}
           data={generalChartDataConfig}
           options={generalChartOptions as ChartOptions<'pie'>}
@@ -628,11 +704,42 @@ const ChartCard: React.FC<ChartCardProps> = ({
     if (chartType === 'donut') {
       return (
         <Doughnut
+          key={chartKey}
           ref={chartRef}
           data={generalChartDataConfig}
           options={generalChartOptions as ChartOptions<'doughnut'>}
         />
       );
+    }
+    if (questionType === 'open' && (chartType === 'wordcloud' as ChartType || chartType === 'topN' as ChartType)) {
+      let sampledData = data;
+      let isSampled = false;
+      if (data.length > 5000) {
+        // 5000개만 무작위 추출
+        const shuffled = [...data].sort(() => Math.random() - 0.5);
+        sampledData = shuffled.slice(0, 5000);
+        isSampled = true;
+      }
+      // 차트는 프로그레스가 끝나야 렌더링
+      if (isChartLoading) return <ProgressOverlay isOpen={true} progress={chartProgress} message={chartMsg} />;
+      if (chartType === 'wordcloud') {
+        const words = extractWordCounts(sampledData);
+        return <>
+          {isSampled && (
+            <div className="text-xs text-yellow-700 text-center mb-2">데이터가 많아 5000개만 무작위로 시각화됩니다.</div>
+          )}
+          <WordCloudChart words={words} width={chartWidth} height={chartHeight} />
+        </>;
+      }
+      if (chartType === 'topN') {
+        const items = extractSentenceCounts(sampledData);
+        return <>
+          {isSampled && (
+            <div className="text-xs text-yellow-700 text-center mb-2">데이터가 많아 5000개만 무작위로 시각화됩니다.</div>
+          )}
+          <TopNList items={items} topN={10} />
+        </>;
+      }
     }
     return null;
   };
@@ -646,10 +753,69 @@ const ChartCard: React.FC<ChartCardProps> = ({
   const baseWidth = 420;
   const chartWidth = baseWidth + (gridSize.w - 1) * 180; // w=1:420, w=2:600, w=3:780...
 
-  // 그래프 렌더링 버튼 클릭 시 localTableData를 applyTableData로 복사만 함
-  const handleRenderChart = () => {
-    setApplyTableData([...localTableData]);
-  };
+  if (pdfExportMode) {
+    return (
+      <div className="bg-white p-2">
+        {/* 헤더/제목 */}
+        {(() => {
+          let header = null;
+          if (typeof questionRowIndex === 'number' && questionRowIndex > 0 && headers && headers[Number(questionIndex)]) {
+            header = headers[Number(questionIndex)];
+          }
+          return header ? <div className="text-xs text-gray-500 mb-1">[{header}]</div> : null;
+        })()}
+        <h3 className="text-lg font-semibold break-words mb-2">{question}</h3>
+        {/* 평균 점수 표기 (리커트만, 게이지바 PDF에서도 항상) */}
+        {questionType === 'likert' && typeof avgScore === 'number' && (
+          <div className={`w-full ${chartMaxWidth} mx-auto`}>
+            <div className="mb-2 text-blue-700 font-bold text-base text-center">
+              평균 점수: {avgScore} / 5점
+            </div>
+            <div className="bg-blue-100 rounded h-3 mb-2">
+              <div
+                className="bg-blue-500 h-3 rounded"
+                style={{ width: `${(avgScore / 5) * 100}%`, transition: 'width 0.5s' }}
+              />
+            </div>
+          </div>
+        )}
+        {/* 차트 영역 */}
+        <div className="my-2 flex items-center justify-center">
+          <div style={{ minWidth: 320, maxWidth: 600, width: '100%', height: 320 }}>
+            {renderChart()}
+          </div>
+        </div>
+        {/* 데이터 테이블 */}
+        <div className="mt-2 border rounded bg-gray-50 p-2 text-xs">
+          <table className="w-full border text-xs">
+            <thead>
+              <tr className="bg-gray-100">
+                <th className="p-1 text-center">순서</th>
+                <th className="p-1 text-center">응답 항목</th>
+                <th className="p-1 text-center">응답갯수</th>
+                <th className="p-1 text-center">비율(%)</th>
+                <th className="p-1 text-center">기타응답</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedTableData.map((row, idx) => {
+                const percent = getPercent(row.value);
+                return (
+                  <tr key={row.id}>
+                    <td className="text-center">{idx + 1}</td>
+                    <td className="text-center">{row.label}</td>
+                    <td className="text-center">{row.value}</td>
+                    <td className="text-center">{percent}</td>
+                    <td className="text-center">{row.isOther ? 'O' : ''}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
 
   // 모든 차트 타입에서 카드 레이아웃을 반환하도록 통일
   return (
@@ -665,20 +831,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
             return header ? <div className="text-xs text-gray-500 mb-1">[{header}]</div> : null;
           })()}
           <h3 className="text-lg font-semibold break-words">
-            {(() => {
-              // matrix chart는 기존대로
-              if (chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') {
-                if (matrixTitle && matrixTitle.trim().length > 0) return matrixTitle;
-                if (data && data.length > 0) {
-                  const labels = data.map(d => (typeof d.label === 'string' ? d.label : ''));
-                  const prefix = findCommonPrefix(labels);
-                  if (prefix.length > 10) return prefix;
-                }
-                return '제목 없음';
-              }
-              // 일반 chart: 헤더 정보 붙이기
-              return question;
-            })()}
+            {question}
           </h3>
         </div>
         {/* 총 응답 갯수: 제목 아래, 오른쪽 정렬, 작은 크기 */}
@@ -686,7 +839,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
       <div className="flex justify-end mb-2 -mt-2">
         <span className="text-xs text-gray-500">총 응답: {formatNumber(respondentCount || Math.round(data.reduce((sum, item) => sum + item.value, 0)))}개</span>
       </div>
-      {/* 평균 점수 표기 (리커트만) */}
+      {/* 평균 점수 표기 (리커트만, 게이지바 PDF에서도 항상) */}
       {questionType === 'likert' && typeof avgScore === 'number' && (
         <div className={`w-full ${chartMaxWidth} mx-auto`}>
           <div className="mb-2 text-blue-700 font-bold text-base text-center">
@@ -722,6 +875,9 @@ const ChartCard: React.FC<ChartCardProps> = ({
           <option value="donut">도넛형</option>
           <option value="verticalMatrix">세로 비율(행렬형)</option>
           <option value="horizontalMatrix">가로 비율(행렬형)</option>
+          {/* 주관식일 때만 워드클라우드/TopN 옵션 노출 */}
+          {questionType === 'open' && <option value="wordcloud">워드 클라우드</option>}
+          {questionType === 'open' && <option value="topN">상위 키워드/문장</option>}
         </select>
         <select
           value={questionType}
@@ -781,24 +937,6 @@ const ChartCard: React.FC<ChartCardProps> = ({
         >
           {dataTableOpen ? '데이터 테이블 닫기' : '데이터 테이블 열기'}
         </button>
-        {/* 그래프 렌더링 버튼 */}
-        <div className="mb-1 font-semibold flex justify-between items-center">
-          <span>데이터 테이블 (편집 가능)</span>
-          <div className="flex flex-row items-center gap-1">
-            <button
-              className="px-2 py-0.5 text-xs bg-blue-200 rounded hover:bg-blue-300"
-              onClick={handleRenderChart}
-            >
-              그래프 렌더링
-            </button>
-            <button
-              className="px-2 py-0.5 text-xs bg-gray-200 rounded hover:bg-gray-300"
-              onClick={() => setLocalTableData(withRowId(data))}
-            >
-              (초기화)
-            </button>
-          </div>
-        </div>
       </div>
       {/* 데이터 테이블 토글 */}
       {dataTableOpen && (
@@ -806,18 +944,18 @@ const ChartCard: React.FC<ChartCardProps> = ({
           <table className="w-full border text-xs">
             <thead>
               <tr className="bg-gray-100">
-                <th className="p-1">순서</th>
-                <th className="p-1">응답 항목
+                <th className="p-1 text-center">순서</th>
+                <th className="p-1 text-center">응답 항목
                   <button onClick={() => handleSort('label')} className="ml-1 text-gray-500">▲▼</button>
                 </th>
-                <th className="p-1">응답갯수
+                <th className="p-1 text-center">응답갯수
                   <button onClick={() => handleSort('value')} className="ml-1 text-gray-500">▲▼</button>
                 </th>
-                <th className="p-1">비율(%)
+                <th className="p-1 text-center">비율(%)
                   <button onClick={() => handleSort('percent')} className="ml-1 text-gray-500">▲▼</button>
                 </th>
-                <th className="p-1">기타응답</th>
-                <th className="p-1">이동</th>
+                <th className="p-1 text-center">기타응답</th>
+                <th className="p-1 text-center">이동</th>
               </tr>
             </thead>
             <tbody>
@@ -825,8 +963,8 @@ const ChartCard: React.FC<ChartCardProps> = ({
                 const percent = getPercent(row.value);
                 return (
                   <tr key={row.id}>
-                    <td>{idx + 1}</td>
-                    <td>
+                    <td className="text-center">{idx + 1}</td>
+                    <td className="text-center">
                       <input
                         className="border rounded px-1 py-0.5 w-full"
                         value={row.label}
@@ -838,7 +976,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
                         }}
                       />
                     </td>
-                    <td>
+                    <td className="text-center">
                       <input
                         type="number"
                         className="border rounded px-1 py-0.5 w-16 text-right"
@@ -853,7 +991,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
                         }}
                       />
                     </td>
-                    <td>
+                    <td className="text-center">
                       <input
                         type="number"
                         className="border rounded px-1 py-0.5 w-16 text-right"
@@ -883,7 +1021,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
                         }}
                       />
                     </td>
-                    <td>
+                    <td className="text-center">
                       <button onClick={() => moveRow(idx, -1)} disabled={idx === 0} className="text-xs px-1">▲</button>
                       <button onClick={() => moveRow(idx, 1)} disabled={idx === sortedTableData.length - 1} className="text-xs px-1">▼</button>
                     </td>
@@ -892,6 +1030,22 @@ const ChartCard: React.FC<ChartCardProps> = ({
               })}
             </tbody>
           </table>
+          {/* 초기화 버튼 추가 */}
+          <div className="mt-2 flex justify-end">
+            <button
+              className="text-xs bg-gray-200 text-gray-700 rounded px-2 py-0.5 hover:bg-blue-100"
+              onClick={() => setLocalTableData(withRowId(data))}
+            >
+              초기화
+            </button>
+          </div>
+        </div>
+      )}
+      {/* 워드클라우드/TopN 차트 렌더링 시 프로그레스/에러 안내 */}
+      {isChartLoading && <ProgressOverlay isOpen={true} progress={chartProgress} message={chartMsg} />}
+      {chartError && (
+        <div className="w-full flex flex-col items-center justify-center py-12">
+          <div className="text-red-600 font-bold text-lg mb-2">{chartError}</div>
         </div>
       )}
     </div>

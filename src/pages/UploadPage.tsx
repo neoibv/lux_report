@@ -6,6 +6,7 @@ import { parseFile } from '../utils/fileParser';
 import useSurveyStore from '../store/surveyStore';
 import * as XLSX from 'xlsx';
 import { QuestionTypeValue, SurveyData, QuestionType, Question } from '../types';
+import ProgressOverlay from '../components/ProgressOverlay';
 
 const UploadPage: React.FC = () => {
   const navigate = useNavigate();
@@ -13,11 +14,16 @@ const UploadPage: React.FC = () => {
   const [previewData, setPreviewData] = useState<string[][]>([]);
   const [selectedQuestionRow, setSelectedQuestionRow] = useState(1);
   const [currentFile, setCurrentFile] = useState<File | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
+  const [progressMsg, setProgressMsg] = useState('');
 
   const handleFileSelect = async (file: File) => {
     try {
       setCurrentFile(file);
-      setLoading(true);
+      setIsLoading(true);
+      setProgress(10);
+      setProgressMsg('파일 미리보기 준비 중...');
 
       // 파일 미리보기 데이터 로드
       const reader = new FileReader();
@@ -33,10 +39,12 @@ const UploadPage: React.FC = () => {
             row.map((cell: any) => String(cell || ''))
           );
           setPreviewData(preview);
+          setProgress(100);
+          setProgressMsg('미리보기 완료');
         } catch (error) {
           setError('파일 미리보기를 불러오는 중 오류가 발생했습니다.');
         } finally {
-          setLoading(false);
+          setIsLoading(false);
         }
       };
 
@@ -47,7 +55,7 @@ const UploadPage: React.FC = () => {
       }
     } catch (error) {
       setError('파일을 읽는 중 오류가 발생했습니다.');
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
@@ -55,9 +63,12 @@ const UploadPage: React.FC = () => {
     if (!currentFile) return;
 
     try {
-      setLoading(true);
+      setIsLoading(true);
+      setProgress(10);
+      setProgressMsg('파일 파싱 중...');
       const data = await parseFile(currentFile, selectedQuestionRow);
-      
+      setProgress(50);
+      setProgressMsg('문항 정보 분석 중...');
       // 문항 유형 정보를 포함하여 questions 배열 생성
       const questions: Question[] = data.questions.map((text: string, index: number) => {
         const questionType = data.questionTypes.find((qt: QuestionType) => qt.columnIndex === index);
@@ -102,16 +113,19 @@ const UploadPage: React.FC = () => {
       };
 
       setSurveyData(surveyData);
+      setProgress(90);
+      setProgressMsg('분석페이지로 이동 중...');
       navigate('/question-types');
     } catch (error) {
       setError(error instanceof Error ? error.message : '파일 처리 중 오류가 발생했습니다.');
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
   return (
     <div className="min-h-screen bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+      <ProgressOverlay isOpen={isLoading} progress={progress} message={progressMsg} />
       <div className="max-w-3xl mx-auto">
         <div className="text-center">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">
