@@ -133,16 +133,15 @@ function findCommonPrefix(strings: string[]) {
 
 // --- 데이터 가공 함수 분리 ---
 function getMatrixChartData(
-  chartData: { labels: string[]; values: number[]; sortedData: { isOther?: boolean }[] },
-  data: Response[],
+  data: Array<{ label: string; value: number; isOther?: boolean; id: string }>,
   respondentCount: number | undefined,
   matrixColors: string[],
   barThickness: number
 ) {
-  const datasetData = chartData.values;
-  const backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? OTHER_GRAY : matrixColors[i % matrixColors.length]);
+  const datasetData = data.map(d => d.value);
+  const backgroundColor = data.map((d, i) => d.isOther ? OTHER_GRAY : matrixColors[i % matrixColors.length]);
   return {
-    labels: chartData.labels,
+    labels: data.map(d => d.label),
     datasets: [{
       data: datasetData,
       backgroundColor,
@@ -155,8 +154,7 @@ function getMatrixChartData(
 }
 
 function getGeneralChartData(
-  chartData: { labels: string[]; values: number[]; sortedData: { isOther?: boolean }[] },
-  data: Response[],
+  data: Array<{ label: string; value: number; isOther?: boolean; id: string }>,
   questionType: QuestionTypeValue,
   respondentCount: number | undefined,
   palette: string[],
@@ -169,17 +167,17 @@ function getGeneralChartData(
   let backgroundColor: string[] = [];
   if (questionType === 'multiple_select') {
     const sum = data.reduce((acc, d) => acc + d.value, 0);
-    datasetData = sum ? chartData.values.map(v => Math.round((v / sum) * 1000) / 10) : chartData.values.map(() => 0);
-    backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? OTHER_GRAY : generateColorSet(chartData.sortedData.length, multiSelectColors)[i]);
+    datasetData = sum ? data.map(v => Math.round((v.value / sum) * 1000) / 10) : data.map(() => 0);
+    backgroundColor = data.map((d, i) => d.isOther ? OTHER_GRAY : generateColorSet(data.length, multiSelectColors)[i]);
   } else if (questionType === 'likert' || questionType === 'matrix') {
-    datasetData = totalResponses ? chartData.values.map(v => Math.round((v / totalResponses) * 1000) / 10) : chartData.values.map(() => 0);
-    backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? OTHER_GRAY : likertColors[i % likertColors.length]);
+    datasetData = totalResponses ? data.map(v => Math.round((v.value / totalResponses) * 1000) / 10) : data.map(() => 0);
+    backgroundColor = data.map((d, i) => d.isOther ? OTHER_GRAY : likertColors[i % likertColors.length]);
   } else {
-    datasetData = totalResponses ? chartData.values.map(v => Math.round((v / totalResponses) * 1000) / 10) : chartData.values.map(() => 0);
-    backgroundColor = chartData.sortedData.map((d, i) => d.isOther ? OTHER_GRAY : generateColorSet(chartData.sortedData.length, objectiveColors)[i]);
+    datasetData = totalResponses ? data.map(v => Math.round((v.value / totalResponses) * 1000) / 10) : data.map(() => 0);
+    backgroundColor = data.map((d, i) => d.isOther ? OTHER_GRAY : generateColorSet(data.length, objectiveColors)[i]);
   }
   return {
-    labels: chartData.labels,
+    labels: data.map(d => d.label),
     datasets: [{
       data: datasetData,
       backgroundColor,
@@ -193,7 +191,7 @@ function getGeneralChartData(
 
 // --- 스택형(전체 누적) 차트 데이터 생성 함수 ---
 function getStackedChartData(
-  chartData: { labels: string[]; values: number[]; sortedData: { isOther?: boolean; label: string; value: number }[] },
+  data: Array<{ label: string; value: number; isOther?: boolean; id: string }>,
   respondentCount: number | undefined,
   palette: string[],
   barThickness: number,
@@ -202,10 +200,10 @@ function getStackedChartData(
 ) {
   // labels: [질문 텍스트 1개]
   // datasets: 각 응답 옵션별로 하나씩, 값은 비율(%)
-  const total = respondentCount || chartData.values.reduce((a, b) => a + b, 0);
+  const total = respondentCount || data.reduce((a, b) => a + b.value, 0);
   return {
     labels: [''], // x축(세로) 또는 y축(가로)에 카테고리 1개만
-    datasets: chartData.sortedData.map((d, i) => ({
+    datasets: data.map((d, i) => ({
       label: d.label,
       data: [total ? Math.round((d.value / total) * 1000) / 10 : 0],
       backgroundColor: d.isOther ? OTHER_GRAY : palette[i % palette.length],
@@ -227,6 +225,11 @@ function getDefaultBarThickness(chartType: ChartType, dataLen: number) {
     return Math.max(30, Math.min(90, Math.floor(300 / dataLen)));
   }
   return 54;
+}
+
+// 고유 id 부여 함수
+function withRowId(arr: Array<{ label: string; value: number; isOther?: boolean; id?: string }>): Array<{ label: string; value: number; isOther?: boolean; id: string }> {
+  return arr.map((d, i) => ({ ...d, id: d.id ?? `row_${i}` }));
 }
 
 const ChartCard: React.FC<ChartCardProps> = ({
@@ -456,8 +459,80 @@ const ChartCard: React.FC<ChartCardProps> = ({
   }, [chartType, chartData.labels, chartData.values, questionType, customYMax]);
 
   // --- 차트 데이터 useMemo 분리 ---
-  const matrixChartDataConfig = useMemo(() => getMatrixChartData(chartData, data, respondentCount, matrixColors, barThickness), [chartData, data, respondentCount, barThickness]);
-  const generalChartDataConfig = useMemo(() => getGeneralChartData(chartData, data, questionType, respondentCount, palette, likertColors, generateColorSet, barThickness), [chartData, data, questionType, respondentCount, barThickness]);
+  const [localTableData, setLocalTableData] = useState<Array<{ label: string; value: number; isOther?: boolean; id: string }>>(() => withRowId(data));
+  // 실제 차트에 반영되는 데이터
+  const [applyTableData, setApplyTableData] = useState<Array<{ label: string; value: number; isOther?: boolean; id: string }>>(() => withRowId(data));
+  // localTableData가 바뀔 때마다 applyTableData도 동기화
+  useEffect(() => {
+    setApplyTableData(localTableData);
+  }, [localTableData]);
+
+  // 정렬 상태
+  const [sortConfig, setSortConfig] = useState<{ key: 'label' | 'value' | 'percent'; direction: 'asc' | 'desc' } | null>(null);
+
+  // 총합 계산
+  const totalResponses = useMemo(() => localTableData.reduce((sum: number, item: { value: number }) => sum + item.value, 0), [localTableData]);
+
+  // getPercent 함수는 한 번만 선언하고, 모든 곳에서 재사용
+  const getPercent = (val: number) => {
+    if (!totalResponses || totalResponses === 0) return 0;
+    return Math.round((val / totalResponses) * 1000) / 10;
+  };
+
+  // 정렬 함수
+  const handleSort = (key: 'label' | 'value' | 'percent') => {
+    setSortConfig(prev => {
+      if (prev && prev.key === key) {
+        // 같은 키면 방향 토글
+        return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+      }
+      return { key, direction: 'desc' };
+    });
+    // 정렬 후 바로 applyTableData 업데이트
+    const sorted = [...localTableData];
+    if (key === 'percent') {
+      sorted.sort((a, b) => getPercent(a.value) - getPercent(b.value));
+    } else {
+      sorted.sort((a, b) => {
+        if (key === 'label') return a.label.localeCompare(b.label);
+        return a.value - b.value;
+      });
+    }
+    if (sortConfig?.direction === 'desc') sorted.reverse();
+    setLocalTableData(sorted);
+  };
+
+  // 실제 정렬된 데이터
+  const sortedTableData = useMemo(() => {
+    if (!sortConfig) return localTableData;
+    const sorted = [...localTableData];
+    if (sortConfig.key === 'percent') {
+      sorted.sort((a, b) => getPercent(a.value) - getPercent(b.value));
+    } else {
+      sorted.sort((a, b) => {
+        if (sortConfig.key === 'label') return a.label.localeCompare(b.label);
+        return a.value - b.value;
+      });
+    }
+    if (sortConfig.direction === 'desc') sorted.reverse();
+    return sorted;
+  }, [localTableData, sortConfig]);
+
+  // 행 이동 함수 (localTableData의 실제 순서 기준으로 이동, sortedTableData는 화면 표시용)
+  const moveRow = (sortedIdx: number, direction: -1 | 1) => {
+    const row = sortedTableData[sortedIdx];
+    const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
+    const to = realIdx + direction;
+    if (to < 0 || to >= localTableData.length) return;
+    const arr = [...localTableData];
+    const [moved] = arr.splice(realIdx, 1);
+    arr.splice(to, 0, moved);
+    setLocalTableData(arr);
+  };
+
+  // 그래프 데이터 생성도 applyTableData만 사용
+  const matrixChartDataConfig = useMemo(() => getMatrixChartData(applyTableData, respondentCount, matrixColors, barThickness), [applyTableData, respondentCount, barThickness]);
+  const generalChartDataConfig = useMemo(() => getGeneralChartData(applyTableData, questionType, respondentCount, palette, likertColors, generateColorSet, barThickness), [applyTableData, questionType, respondentCount, barThickness]);
   const stackedChartDataConfig = useMemo(() => {
     let colorSet = palette;
     if (questionType === 'likert' || questionType === 'matrix') {
@@ -467,10 +542,9 @@ const ChartCard: React.FC<ChartCardProps> = ({
     } else if (questionType === 'multiple_select') {
       colorSet = multiSelectColors;
     }
-    // 전체 누적형만 barPercentage/categoryPercentage 40% 감소
     const barP = 0.45, catP = 0.51;
-    return getStackedChartData(chartData, respondentCount, colorSet, barThickness, barP, catP);
-  }, [chartData, respondentCount, questionType, barThickness]);
+    return getStackedChartData(applyTableData, respondentCount, colorSet, barThickness, barP, catP);
+  }, [applyTableData, respondentCount, questionType, barThickness]);
 
   // --- 옵션 useMemo 분리 ---
   const stackedChartOptions = useMemo(() => ({
@@ -571,6 +645,11 @@ const ChartCard: React.FC<ChartCardProps> = ({
   const cardMinHeight = chartHeight + 250; // 카드 전체 높이(그래프+옵션+여백 등)
   const baseWidth = 420;
   const chartWidth = baseWidth + (gridSize.w - 1) * 180; // w=1:420, w=2:600, w=3:780...
+
+  // 그래프 렌더링 버튼 클릭 시 localTableData를 applyTableData로 복사만 함
+  const handleRenderChart = () => {
+    setApplyTableData([...localTableData]);
+  };
 
   // 모든 차트 타입에서 카드 레이아웃을 반환하도록 통일
   return (
@@ -702,61 +781,111 @@ const ChartCard: React.FC<ChartCardProps> = ({
         >
           {dataTableOpen ? '데이터 테이블 닫기' : '데이터 테이블 열기'}
         </button>
+        {/* 그래프 렌더링 버튼 */}
+        <div className="mb-1 font-semibold flex justify-between items-center">
+          <span>데이터 테이블 (편집 가능)</span>
+          <div className="flex flex-row items-center gap-1">
+            <button
+              className="px-2 py-0.5 text-xs bg-blue-200 rounded hover:bg-blue-300"
+              onClick={handleRenderChart}
+            >
+              그래프 렌더링
+            </button>
+            <button
+              className="px-2 py-0.5 text-xs bg-gray-200 rounded hover:bg-gray-300"
+              onClick={() => setLocalTableData(withRowId(data))}
+            >
+              (초기화)
+            </button>
+          </div>
+        </div>
       </div>
       {/* 데이터 테이블 토글 */}
       {dataTableOpen && (
         <div className="mt-2 border rounded bg-gray-50 p-2 text-xs">
-          <div className="mb-1 font-semibold">데이터 테이블 (편집 가능)</div>
           <table className="w-full border text-xs">
             <thead>
               <tr className="bg-gray-100">
-                <th className="p-1">응답 항목</th>
-                <th className="p-1">응답갯수</th>
-                <th className="p-1">비율(%)</th>
+                <th className="p-1">순서</th>
+                <th className="p-1">응답 항목
+                  <button onClick={() => handleSort('label')} className="ml-1 text-gray-500">▲▼</button>
+                </th>
+                <th className="p-1">응답갯수
+                  <button onClick={() => handleSort('value')} className="ml-1 text-gray-500">▲▼</button>
+                </th>
+                <th className="p-1">비율(%)
+                  <button onClick={() => handleSort('percent')} className="ml-1 text-gray-500">▲▼</button>
+                </th>
                 <th className="p-1">기타응답</th>
+                <th className="p-1">이동</th>
               </tr>
             </thead>
             <tbody>
-              {chartData.sortedData.map((row, idx) => {
-                const totalResponses = respondentCount !== undefined ? respondentCount : Math.round(data.reduce((sum, item) => sum + item.value, 0));
-                const toPercent = (val: number) => {
-                  if (questionType === 'multiple_select') {
-                    const sum = data.reduce((acc, d) => acc + d.value, 0);
-                    if (!sum) return 0;
-                    return Math.round((val / sum) * 1000) / 10;
-                  } else {
-                    if (!totalResponses || totalResponses === 0) return 0;
-                    return Math.round((val / totalResponses) * 1000) / 10;
-                  }
-                };
+              {sortedTableData.map((row, idx) => {
+                const percent = getPercent(row.value);
                 return (
-                  <tr key={row.label}>
+                  <tr key={row.id}>
+                    <td>{idx + 1}</td>
                     <td>
                       <input
                         className="border rounded px-1 py-0.5 w-full"
                         value={row.label}
                         onChange={e => {
-                          const newData = [...chartData.sortedData];
-                          newData[idx] = { ...row, label: e.target.value };
-                          onDataTableEdit(newData);
+                          const newData = [...localTableData];
+                          const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
+                          newData[realIdx] = { ...row, label: e.target.value };
+                          setLocalTableData(newData);
                         }}
                       />
                     </td>
-                    <td>{formatNumber(row.value)}</td>
-                    <td>{
-                      (questionType === 'open')
-                        ? '-' : `${formatNumber(toPercent(row.value))}%`
-                    }</td>
+                    <td>
+                      <input
+                        type="number"
+                        className="border rounded px-1 py-0.5 w-16 text-right"
+                        value={row.value}
+                        min={0}
+                        onChange={e => {
+                          const newVal = Number(e.target.value);
+                          const newData = [...localTableData];
+                          const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
+                          newData[realIdx] = { ...row, value: newVal };
+                          setLocalTableData(newData);
+                        }}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="number"
+                        className="border rounded px-1 py-0.5 w-16 text-right"
+                        value={percent}
+                        min={0}
+                        max={100}
+                        step={0.1}
+                        onChange={e => {
+                          const newPercent = Number(e.target.value);
+                          const newVal = Math.round((newPercent / 100) * totalResponses);
+                          const newData = [...localTableData];
+                          const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
+                          newData[realIdx] = { ...row, value: newVal };
+                          setLocalTableData(newData);
+                        }}
+                      />
+                    </td>
                     <td className="text-center">
                       <input
                         type="checkbox"
                         checked={!!row.isOther}
                         onChange={e => {
-                          const newData = [...chartData.sortedData];
-                          newData[idx] = { ...row, isOther: e.target.checked };
-                          onDataTableEdit(newData);
+                          const newData = [...localTableData];
+                          const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
+                          newData[realIdx] = { ...row, isOther: e.target.checked };
+                          setLocalTableData(newData);
                         }}
                       />
+                    </td>
+                    <td>
+                      <button onClick={() => moveRow(idx, -1)} disabled={idx === 0} className="text-xs px-1">▲</button>
+                      <button onClick={() => moveRow(idx, 1)} disabled={idx === sortedTableData.length - 1} className="text-xs px-1">▼</button>
                     </td>
                   </tr>
                 );
