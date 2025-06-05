@@ -105,6 +105,16 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [progressMsg, setProgressMsg] = useState('');
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+
+  // 컴포넌트 마운트 시 모든 그룹을 접힌 상태로 초기화
+  useEffect(() => {
+    const initialExpandedState = typeOrder.reduce((acc, type) => {
+      acc[type] = false;
+      return acc;
+    }, {} as Record<string, boolean>);
+    setExpandedGroups(initialExpandedState);
+  }, []);
 
   if (!surveyData) {
     navigate('/upload');
@@ -683,126 +693,168 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
                 return (
                   <div key={type} className={`rounded-lg border-2 ${typeColors[t].border} ${typeColors[t].bg} p-3`}>
                     <div className="flex items-center gap-2 mb-3">
-                      <span className={`text-base font-semibold ${typeColors[t].text}`}>{typeLabels[t]}</span>
-                      <span className="text-xs text-gray-500">{qs.length}개</span>
+                      <div 
+                        className="flex items-center gap-2 cursor-pointer flex-1"
+                        onClick={() => setExpandedGroups(prev => ({ ...prev, [type]: !prev[type] }))}
+                      >
+                        <span className={`text-base font-semibold ${typeColors[t].text}`}>{typeLabels[t]}</span>
+                        <span className="text-xs text-gray-500">{qs.length}개</span>
+                        <span className="ml-auto">
+                          {expandedGroups[type] ? '▼' : '▶'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 ml-4">
+                        <input
+                          type="checkbox"
+                          checked={qs.length > 0 && qs.every(qt => analysisState.selectedQuestions.includes(qt.columnIndex))}
+                          onChange={() => {
+                            if (qs.length > 0) {
+                              const allSelected = qs.every(qt => analysisState.selectedQuestions.includes(qt.columnIndex));
+                              if (allSelected) {
+                                setAnalysisState((prev: AnalysisState) => ({
+                                  ...prev,
+                                  selectedQuestions: prev.selectedQuestions.filter(idx => !qs.some(qt => qt.columnIndex === idx))
+                                }));
+                              } else {
+                                setAnalysisState((prev: AnalysisState) => ({
+                                  ...prev,
+                                  selectedQuestions: [
+                                    ...prev.selectedQuestions,
+                                    ...qs.map(qt => qt.columnIndex).filter(idx => !prev.selectedQuestions.includes(idx))
+                                  ]
+                                }));
+                              }
+                            }
+                          }}
+                          className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span className="text-xs text-gray-500">전체 선택</span>
+                      </div>
                     </div>
-                    {Object.entries(matrixGroups).map(([groupId, groupQs]) => {
-                      // 그룹 전체 선택 여부
-                      const allGroupSelected = groupQs.every((qt: any) => analysisState.selectedQuestions.includes(qt.columnIndex));
-                      const handleGroupSelect = () => {
-                        if (allGroupSelected) {
-                          setAnalysisState((prev: AnalysisState) => ({
-                            ...prev,
-                            selectedQuestions: prev.selectedQuestions.filter(idx => !groupQs.some((qt: any) => qt.columnIndex === idx))
-                          }));
-                        } else {
-                          setAnalysisState((prev: AnalysisState) => ({
-                            ...prev,
-                            selectedQuestions: [
-                              ...prev.selectedQuestions,
-                              ...groupQs.map((qt: any) => qt.columnIndex).filter(idx => !prev.selectedQuestions.includes(idx))
-                            ]
-                          }));
-                        }
-                      };
-                      // 공통 접두사(문항 유형 검토에서 저장된 commonPrefix) 추출
-                      const questionTexts = groupQs.map((qt: any) => surveyData.questions[qt.columnIndex]?.text || '');
-                      const commonPrefix = findCommonPrefix(questionTexts);
-                      return (
-                        <div key={groupId} className="mb-2 ml-2 border-l-4 border-purple-200 pl-2">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-xs text-purple-700 font-semibold">{commonPrefix}</span>
-                            <input
-                              type="checkbox"
-                              checked={allGroupSelected}
-                              onChange={handleGroupSelect}
-                              className="ml-2"
-                            />
-                            <span className="text-xs text-gray-500">세트 전체 선택</span>
-                          </div>
-                          {groupQs.map((qt: any) => {
-                            const fullText = surveyData.questions[qt.columnIndex]?.text || '';
-                            let diff = fullText.startsWith(commonPrefix) ? fullText.slice(commonPrefix.length).trim() : fullText;
-                            if (!diff) diff = fullText;
-                            return (
-                              <div key={qt.columnIndex} className="flex items-center mb-1 ml-4">
+                    {expandedGroups[type] && (
+                      <>
+                        {Object.entries(matrixGroups).map(([groupId, groupQs]) => {
+                          // 그룹 전체 선택 여부
+                          const allGroupSelected = groupQs.every((qt: any) => analysisState.selectedQuestions.includes(qt.columnIndex));
+                          const handleGroupSelect = () => {
+                            if (allGroupSelected) {
+                              setAnalysisState((prev: AnalysisState) => ({
+                                ...prev,
+                                selectedQuestions: prev.selectedQuestions.filter(idx => !groupQs.some((qt: any) => qt.columnIndex === idx))
+                              }));
+                            } else {
+                              setAnalysisState((prev: AnalysisState) => ({
+                                ...prev,
+                                selectedQuestions: [
+                                  ...prev.selectedQuestions,
+                                  ...groupQs.map((qt: any) => qt.columnIndex).filter(idx => !prev.selectedQuestions.includes(idx))
+                                ]
+                              }));
+                            }
+                          };
+                          // 공통 접두사(문항 유형 검토에서 저장된 commonPrefix) 추출
+                          const questionTexts = groupQs.map((qt: any) => surveyData.questions[qt.columnIndex]?.text || '');
+                          const commonPrefix = findCommonPrefix(questionTexts);
+                          return (
+                            <div key={groupId} className="ml-4 mb-2">
+                              <div className="flex items-center gap-2">
                                 <input
                                   type="checkbox"
-                                  checked={analysisState.selectedQuestions.includes(qt.columnIndex)}
-                                  readOnly
-                                  disabled
-                                  style={{ opacity: 0.5, pointerEvents: 'none' }}
+                                  checked={allGroupSelected}
+                                  onChange={handleGroupSelect}
+                                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                                 />
-                                <span
-                                  className={`text-sm truncate cursor-pointer ${isQuestionRendered(qt.columnIndex) ? 'text-gray-400' : 'text-gray-900'}`}
-                                  title={fullText}
-                                  style={{ maxWidth: '600px', width: '90%', display: 'inline-block', verticalAlign: 'middle' }}
-                                >
-                                  {getHeaderForColumn(qt.columnIndex) && (
-                                    <span className="text-xs text-gray-500 mr-1">[{getHeaderForColumn(qt.columnIndex)}]</span>
-                                  )}
-                                  {diff}
-                                </span>
+                                <span className="text-sm font-medium text-gray-700">{commonPrefix || `그룹 ${groupId}`}</span>
                               </div>
-                            );
-                          })}
-                        </div>
-                      );
-                    })}
+                              <div className="ml-6 mt-1 space-y-1">
+                                {groupQs.map((qt: any) => {
+                                  const fullText = surveyData.questions[qt.columnIndex]?.text || '';
+                                  let diff = fullText.startsWith(commonPrefix) ? fullText.slice(commonPrefix.length).trim() : fullText;
+                                  if (!diff) diff = fullText;
+                                  return (
+                                    <div key={qt.columnIndex} className="flex items-center gap-2">
+                                      <input
+                                        type="checkbox"
+                                        checked={analysisState.selectedQuestions.includes(qt.columnIndex)}
+                                        onChange={() => handleSelectOne(qt.columnIndex)}
+                                        className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                      />
+                                      <span className="text-sm text-gray-600">
+                                        {getHeaderForColumn(qt.columnIndex) && (
+                                          <span className="text-xs text-gray-500 mr-1">[{getHeaderForColumn(qt.columnIndex)}]</span>
+                                        )}
+                                        {diff}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </>
+                    )}
                   </div>
                 );
               }
-              // 일반 문항 처리
               return (
                 <div key={type} className={`rounded-lg border-2 ${typeColors[t].border} ${typeColors[t].bg} p-3`}>
                   <div className="flex items-center gap-2 mb-3">
-                    <span className={`text-base font-semibold ${typeColors[t].text}`}>{typeLabels[t]}</span>
-                    <span className="text-xs text-gray-500">{qs.length}개</span>
-                    <input
-                      type="checkbox"
-                      checked={qs.length > 0 && qs.every(qt => analysisState.selectedQuestions.includes(qt.columnIndex))}
-                      onChange={() => {
-                        if (qs.length > 0) {
-                          const allSelected = qs.every(qt => analysisState.selectedQuestions.includes(qt.columnIndex));
-                          if (allSelected) {
-                            setAnalysisState((prev: AnalysisState) => ({
-                              ...prev,
-                              selectedQuestions: prev.selectedQuestions.filter(idx => !qs.some(qt => qt.columnIndex === idx))
-                            }));
-                          } else {
-                            setAnalysisState((prev: AnalysisState) => ({
-                              ...prev,
-                              selectedQuestions: [
-                                ...prev.selectedQuestions,
-                                ...qs.map(qt => qt.columnIndex).filter(idx => !prev.selectedQuestions.includes(idx))
-                              ]
-                            }));
-                          }
-                        }
-                      }}
-                      className="ml-2"
-                    />
-                    <span className="text-xs text-gray-500">전체 선택</span>
-                  </div>
-                  {qs.map((qt) => (
-                    <div key={qt.columnIndex} className="flex items-center mb-1 ml-4">
-                      <input
-                        type="checkbox"
-                        checked={analysisState.selectedQuestions.includes(qt.columnIndex)}
-                        onChange={() => handleSelectOne(qt.columnIndex)}
-                      />
-                      <span
-                        className={`text-sm truncate cursor-pointer ${isQuestionRendered(qt.columnIndex) ? 'text-gray-400' : 'text-gray-900'}`}
-                        title={surveyData.questions[qt.columnIndex]?.text || ''}
-                        style={{ maxWidth: '600px', width: '90%', display: 'inline-block', verticalAlign: 'middle' }}
-                      >
-                        {getHeaderForColumn(qt.columnIndex) && (
-                          <span className="text-xs text-gray-500 mr-1">[{getHeaderForColumn(qt.columnIndex)}]</span>
-                        )}
-                        {surveyData.questions[qt.columnIndex]?.text || ''}
+                    <div 
+                      className="flex items-center gap-2 cursor-pointer flex-1"
+                      onClick={() => setExpandedGroups(prev => ({ ...prev, [type]: !prev[type] }))}
+                    >
+                      <span className={`text-base font-semibold ${typeColors[t].text}`}>{typeLabels[t]}</span>
+                      <span className="text-xs text-gray-500">{qs.length}개</span>
+                      <span className="ml-auto">
+                        {expandedGroups[type] ? '▼' : '▶'}
                       </span>
                     </div>
-                  ))}
+                    <div className="flex items-center gap-2 ml-4">
+                      <input
+                        type="checkbox"
+                        checked={qs.length > 0 && qs.every(qt => analysisState.selectedQuestions.includes(qt.columnIndex))}
+                        onChange={() => {
+                          if (qs.length > 0) {
+                            const allSelected = qs.every(qt => analysisState.selectedQuestions.includes(qt.columnIndex));
+                            if (allSelected) {
+                              setAnalysisState((prev: AnalysisState) => ({
+                                ...prev,
+                                selectedQuestions: prev.selectedQuestions.filter(idx => !qs.some(qt => qt.columnIndex === idx))
+                              }));
+                            } else {
+                              setAnalysisState((prev: AnalysisState) => ({
+                                ...prev,
+                                selectedQuestions: [
+                                  ...prev.selectedQuestions,
+                                  ...qs.map(qt => qt.columnIndex).filter(idx => !prev.selectedQuestions.includes(idx))
+                                ]
+                              }));
+                            }
+                          }
+                        }}
+                        className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="text-xs text-gray-500">전체 선택</span>
+                    </div>
+                  </div>
+                  {expandedGroups[type] && (
+                    <div className="space-y-2">
+                      {qs.map((qt: any) => (
+                        <div key={qt.columnIndex} className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={analysisState.selectedQuestions.includes(qt.columnIndex)}
+                            onChange={() => handleSelectOne(qt.columnIndex)}
+                            className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="text-sm text-gray-600">
+                            {surveyData.questions[qt.columnIndex]?.text || `문항 ${qt.columnIndex}`}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
