@@ -1,8 +1,10 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import useSurveyStore from '../store/surveyStore';
 import ChartCard from '../components/ChartCard';
 import { useReactToPrint } from 'react-to-print';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 
 interface ReportPageProps {
   reportState: any;
@@ -15,6 +17,8 @@ const ReportPage: React.FC<ReportPageProps> = ({ reportState, setReportState, an
   const navigate = useNavigate();
   const { surveyData } = useSurveyStore();
   const printRef = useRef<HTMLDivElement>(null);
+  const [gridColumns, setGridColumns] = useState(4); // 기본값 4열
+
   // @ts-ignore
   const handlePrint = useReactToPrint({
     content: () => printRef.current,
@@ -24,61 +28,136 @@ const ReportPage: React.FC<ReportPageProps> = ({ reportState, setReportState, an
     onAfterPrint: () => {}
   });
 
+  // PDF 다운로드 함수: 각 카드별 실제 DOM을 캡처하여 3열 그리드로 PDF에 배치 (gridSize 반영)
+  const handleDownloadPDF = async () => {
+    if (!reportState.reportItems || reportState.reportItems.length === 0) return;
+    const pdf = new jsPDF('p', 'mm', 'a4');
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const margin = 15;
+    const contentWidth = pageWidth - margin * 2;
+    const colCount = gridColumns;
+    const gap = 8; // 카드 간격(mm)
+    const cardWidth = (contentWidth - gap * (colCount - 1)) / colCount;
+    let grid = [] as number[][]; // [row][col] = 1(점유)
+    let y = margin;
+    let row = 0;
+    let maxRowHeight = 0;
+    for (let i = 0; i < reportState.reportItems.length; i++) {
+      const item = reportState.reportItems[i];
+      const chartId = `pdf-export-${item.questionIndex}`;
+      const exportElem = document.getElementById(chartId);
+      if (!exportElem) continue;
+      const gridW = item.gridSize?.w || 1;
+      const gridH = item.gridSize?.h || 1;
+      const imgW = cardWidth * gridW + gap * (gridW - 1);
+      const canvas = await html2canvas(exportElem, { scale: 2, backgroundColor: '#fff', useCORS: true });
+      const imgData = canvas.toDataURL('image/png');
+      const imgProps = pdf.getImageProperties(imgData);
+      const baseImgH = (imgProps.height * imgW) / imgProps.width;
+      const imgH = baseImgH * gridH;
+      let col = 0;
+      let found = false;
+      while (!found) {
+        if (!grid[row]) grid[row] = Array(colCount).fill(0);
+        if (col + gridW <= colCount && grid[row].slice(col, col + gridW).every(v => v === 0)) {
+          found = true;
+          for (let k = 0; k < gridW; k++) grid[row][col + k] = 1;
+        } else {
+          col++;
+          if (col > colCount - 1) {
+            row++;
+            y += maxRowHeight + gap;
+            col = 0;
+            maxRowHeight = 0;
+          }
+        }
+      }
+      if (y + imgH > pageHeight - margin) {
+        pdf.addPage();
+        y = margin;
+        row = 0;
+        col = 0;
+        grid = [];
+        maxRowHeight = 0;
+        if (!grid[row]) grid[row] = Array(colCount).fill(0);
+        for (let k = 0; k < gridW; k++) grid[row][col + k] = 1;
+      }
+      const x = margin + col * (cardWidth + gap);
+      pdf.addImage(imgData, 'PNG', x, y, imgW, imgH);
+      if (imgH > maxRowHeight) maxRowHeight = imgH;
+    }
+    pdf.save('설문_보고서.pdf');
+  };
+
   if (!surveyData) {
     navigate('/upload');
     return null;
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-2 px-0 w-screen flex justify-start items-start">
-      <div className="">
-        <div className="text-center mb-6 flex flex-col md:flex-row md:items-center md:justify-between">
+    <div className="min-h-screen bg-gray-50 py-2 px-2 w-screen">
+      <div>
+        <div className="text-center mb-6 flex flex-col md:flex-row md:items-center md:justify-between px-4 md:px-8">
           <div>
             <h1 className="text-3xl font-bold text-gray-900 mb-2">보고서 생성</h1>
             <p className="text-lg text-gray-600">분석 결과를 보고서로 만들어보세요</p>
           </div>
-          <button
-            onClick={() => setReportState((prev: any) => ({ ...prev, reportItems: [] }))}
-            className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-400 focus:ring-offset-2 mt-4 md:mt-0"
-            disabled={reportState.reportItems.length === 0}
-          >
-            그래프 전체 삭제
-          </button>
+          <div className="flex items-center gap-4 mt-4 md:mt-0">
+            <div className="flex items-center gap-2">
+              <label htmlFor="gridColumns" className="text-sm font-medium text-gray-700">열 수:</label>
+              <select
+                id="gridColumns"
+                value={gridColumns}
+                onChange={(e) => setGridColumns(Number(e.target.value))}
+                className="block w-20 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+              >
+                <option value={2}>2열</option>
+                <option value={3}>3열</option>
+                <option value={4}>4열</option>
+                <option value={5}>5열</option>
+              </select>
+            </div>
+            <button
+              onClick={handleDownloadPDF}
+              className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2"
+              disabled={reportState.reportItems.length === 0}
+            >
+              PDF로 다운로드
+            </button>
+            <button
+              onClick={() => setReportState((prev: any) => ({ ...prev, reportItems: [] }))}
+              className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-400 focus:ring-offset-2"
+              disabled={reportState.reportItems.length === 0}
+            >
+              그래프 전체 삭제
+            </button>
+          </div>
         </div>
         <div ref={printRef} className="bg-white rounded-lg shadow p-2">
           {reportState.reportItems.length === 0 ? (
             <p className="text-gray-600">보고서에 추가된 그래프가 없습니다.</p>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            <div 
+              className="grid gap-4 p-2"
+              style={{
+                gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))`
+              }}
+            >
               {reportState.reportItems.map((item: any, idx: number) => {
-                const base = analysisState.charts.find((c: any) => String(c.questionIndex) === String(item.questionIndex)) || {};
-                const question = item.question || base.question || '';
-                const headers = item.headers || base.headers || [];
-                const questionRowIndex = item.questionRowIndex ?? base.questionRowIndex;
-                let headerText = '';
-                if (headers && typeof questionRowIndex === 'number' && questionRowIndex > 0 && headers[Number(item.questionIndex)]) {
-                  headerText = headers[Number(item.questionIndex)];
-                }
+                console.log('보고서에서 ChartCard로 전달되는 item:', JSON.stringify(item, null, 2));
                 return (
-                  <div key={item.questionIndex} className="border rounded-lg p-4 relative bg-gray-50 flex flex-col">
-                    {(headerText || question) && (
-                      <div className="mb-2">
-                        {headerText && <div className="text-xs text-gray-500 mb-1">[{headerText}]</div>}
-                        {question && <div className="text-base font-bold">{question}</div>}
-                      </div>
-                    )}
+                  <div
+                    key={item.questionIndex}
+                    id={`pdf-export-${item.questionIndex}`}
+                    className="border rounded-lg p-4 relative bg-gray-50 flex flex-col"
+                  >
                     <ChartCard
-                      questionIndex={String(item.questionIndex)}
-                      question={question}
-                      questionType={item.questionType?.type}
-                      chartType={item.chartType}
-                      data={item.data}
-                      colors={item.colors}
-                      respondentCount={item.respondentCount}
-                      gridSize={item.gridSize || { w: 1, h: 1 }}
-                      avgScore={item.avgScore}
-                      headers={headers}
-                      questionRowIndex={questionRowIndex}
+                      {...item}
+                      gridColumns={gridColumns}
+                      pdfExportMode={false}
+                      isReportMode={false}
+                      hideTitle={false}
                       onChartTypeChange={() => {}}
                       onQuestionTypeChange={() => {}}
                       onDataTableEdit={() => {}}
@@ -87,9 +166,6 @@ const ReportPage: React.FC<ReportPageProps> = ({ reportState, setReportState, an
                       onDelete={() => {}}
                       onMoveUp={() => {}}
                       onMoveDown={() => {}}
-                      isReportMode={true}
-                      dataTable={item.dataTable}
-                      hideTitle={true}
                     />
                     <div className="flex gap-1 mt-auto">
                       <button onClick={() => {
@@ -126,12 +202,6 @@ const ReportPage: React.FC<ReportPageProps> = ({ reportState, setReportState, an
             className="px-4 py-2 border border-gray-300 rounded-md text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
           >
             이전
-          </button>
-          <button
-            onClick={handlePrint}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
-          >
-            보고서 다운로드
           </button>
         </div>
       </div>
