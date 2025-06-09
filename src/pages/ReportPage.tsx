@@ -32,9 +32,18 @@ const ReportPage: React.FC<ReportPageProps> = ({ reportState, setReportState, an
   return (
     <div className="min-h-screen bg-gray-50 py-2 px-0 w-screen flex justify-start items-start">
       <div className="">
-        <div className="text-center mb-6">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">보고서 생성</h1>
-          <p className="text-lg text-gray-600">분석 결과를 보고서로 만들어보세요</p>
+        <div className="text-center mb-6 flex flex-col md:flex-row md:items-center md:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">보고서 생성</h1>
+            <p className="text-lg text-gray-600">분석 결과를 보고서로 만들어보세요</p>
+          </div>
+          <button
+            onClick={() => setReportState((prev: any) => ({ ...prev, reportItems: [] }))}
+            className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-400 focus:ring-offset-2 mt-4 md:mt-0"
+            disabled={reportState.reportItems.length === 0}
+          >
+            그래프 전체 삭제
+          </button>
         </div>
         <div ref={printRef} className="bg-white rounded-lg shadow p-2">
           {reportState.reportItems.length === 0 ? (
@@ -78,19 +87,9 @@ const ReportPage: React.FC<ReportPageProps> = ({ reportState, setReportState, an
                       onDelete={() => {}}
                       onMoveUp={() => {}}
                       onMoveDown={() => {}}
-                    />
-                    <textarea
-                      className="w-full border rounded p-2 text-sm mb-2 mt-2"
-                      rows={2}
-                      placeholder="이 그래프에 대한 설명을 입력하세요..."
-                      value={item.description || ''}
-                      onChange={e => {
-                        setReportState((prev: any) => {
-                          const arr = [...prev.reportItems];
-                          arr[idx] = { ...arr[idx], description: e.target.value };
-                          return { ...prev, reportItems: arr };
-                        });
-                      }}
+                      isReportMode={true}
+                      dataTable={item.dataTable}
+                      hideTitle={true}
                     />
                     <div className="flex gap-1 mt-auto">
                       <button onClick={() => {

@@ -106,6 +106,7 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
   const [progress, setProgress] = useState(0);
   const [progressMsg, setProgressMsg] = useState('');
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [gridColumns, setGridColumns] = useState(4); // 기본값 4열
 
   // 컴포넌트 마운트 시 모든 그룹을 접힌 상태로 초기화
   useEffect(() => {
@@ -474,8 +475,28 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
 
   // 보고서로 이동(목업)
   const handleMoveToReport = (qIdx: any) => {
-    // TODO: 보고서 영역에 추가하는 로직 구현
-    alert('보고서로 이동: ' + (surveyData.questions[qIdx] || '')); 
+    const chart = analysisState.charts.find((c: any) => String(c.questionIndex) === String(qIdx));
+    if (!chart) return;
+
+    // 데이터 테이블 정보 포함
+    const dataTable = {
+      headers: chart.headers || [],
+      data: chart.data || [],
+      questionRowIndex: chart.questionRowIndex
+    };
+
+    setReportState((prev: any) => ({
+      ...prev,
+      reportItems: [
+        ...prev.reportItems,
+        {
+          ...chart,
+          gridSize: chart.gridSize || { w: 1, h: 1 },
+          dataTable,
+          description: ''
+        }
+      ]
+    }));
   };
 
   // 개별 문항 선택 함수 복구
@@ -604,6 +625,11 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
     }
 
     pdf.save('분석_그래프.pdf');
+  };
+
+  // 그리드 컬럼 수 변경 핸들러
+  const handleGridColumnsChange = (columns: number) => {
+    setGridColumns(columns);
   };
 
   return (
@@ -868,13 +894,28 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
               <h2 className="text-lg font-bold">그래프 결과</h2>
               <p className="text-sm text-gray-600">생성된 그래프가 여기에 표시됩니다.</p>
             </div>
-            <button
-              onClick={handleDownloadPDF}
-              className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-xs ml-4"
-              disabled={analysisState.reportSelectedCharts.length === 0}
-            >
-              PDF로 다운로드
-            </button>
+            <div className="flex items-center gap-4">
+              {/* 그리드 레이아웃 선택 */}
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600">그리드 레이아웃:</span>
+                <select
+                  value={gridColumns}
+                  onChange={(e) => handleGridColumnsChange(Number(e.target.value))}
+                  className="border rounded px-2 py-1 text-sm"
+                >
+                  <option value={2}>2열</option>
+                  <option value={3}>3열</option>
+                  <option value={4}>4열</option>
+                </select>
+              </div>
+              <button
+                onClick={handleDownloadPDF}
+                className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-xs"
+                disabled={analysisState.reportSelectedCharts.length === 0}
+              >
+                PDF로 다운로드
+              </button>
+            </div>
           </div>
           
           {/* 그래프 결과/카드 영역 */}
@@ -918,49 +959,57 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
             </button>
             <span className="text-sm text-gray-500">선택된 그래프: {analysisState.reportSelectedCharts.length}개</span>
           </div>
-          <div className="flex-1 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {analysisState.charts.map((c: any) => {
-              const isSelected = analysisState.reportSelectedCharts.includes(c.questionIndex);
-              return (
-                <div
-                  id={`pdf-export-${c.questionIndex}`}
-                  key={c.questionIndex}
-                  style={{
-                    gridColumn: `span ${c.gridSize.w}`,
-                    gridRow: `span ${c.gridSize.h * 2}`
-                  }}
-                  className={`relative`}
-                >
-                  <ChartCard
-                    questionIndex={String(c.questionIndex)}
-                    question={surveyData.questions[c.questionIndex]?.text || `문항 ${c.questionIndex + 1}`}
-                    questionType={c.questionType.type as QuestionTypeValue}
-                    chartType={c.chartType}
-                    data={c.data}
-                    colors={c.colors}
-                    respondentCount={c.respondentCount}
-                    avgScore={c.avgScore}
-                    headers={surveyData.headers}
-                    questionRowIndex={surveyData.questionRowIndex}
-                    gridSize={c.gridSize}
-                    onChartTypeChange={(newType) => handleChartTypeChange(c.questionIndex, newType)}
-                    onQuestionTypeChange={(newType) => handleQuestionTypeChange(c.questionIndex, { ...c.questionType, type: newType as QuestionTypeValue })}
-                    onDataTableEdit={(newData) => handleDataTableEdit(c.questionIndex, newData)}
-                    onGridSizeChange={(newSize) => handleGridSizeChange(c.questionIndex, newSize)}
-                    onDuplicate={() => handleDuplicateChart(c.questionIndex)}
-                    onDelete={() => handleDeleteChart(c.questionIndex)}
-                    onMoveUp={() => moveChart(c.questionIndex, 'up')}
-                    onMoveDown={() => moveChart(c.questionIndex, 'down')}
-                  />
+          <div className="flex-1 overflow-y-auto">
+            <div 
+              className="grid gap-4"
+              style={{
+                gridTemplateColumns: `repeat(${gridColumns}, 1fr)`
+              }}
+            >
+              {analysisState.charts.map((c: any) => {
+                const isSelected = analysisState.reportSelectedCharts.includes(c.questionIndex);
+                return (
+                  <div
+                    id={`pdf-export-${c.questionIndex}`}
+                    key={c.questionIndex}
+                    style={{
+                      gridColumn: `span ${Math.min(c.gridSize.w, gridColumns)}`,
+                      gridRow: `span ${c.gridSize.h}`
+                    }}
+                    className={`relative`}
+                  >
+                    <ChartCard
+                      questionIndex={String(c.questionIndex)}
+                      question={surveyData.questions[c.questionIndex]?.text || `문항 ${c.questionIndex + 1}`}
+                      questionType={c.questionType.type as QuestionTypeValue}
+                      chartType={c.chartType}
+                      data={c.data}
+                      colors={c.colors}
+                      respondentCount={c.respondentCount}
+                      avgScore={c.avgScore}
+                      headers={surveyData.headers}
+                      questionRowIndex={surveyData.questionRowIndex}
+                      gridSize={c.gridSize}
+                      gridColumns={gridColumns}
+                      onChartTypeChange={(newType) => handleChartTypeChange(c.questionIndex, newType)}
+                      onQuestionTypeChange={(newType) => handleQuestionTypeChange(c.questionIndex, { ...c.questionType, type: newType as QuestionTypeValue })}
+                      onDataTableEdit={(newData) => handleDataTableEdit(c.questionIndex, newData)}
+                      onGridSizeChange={(newSize) => handleGridSizeChange(c.questionIndex, newSize)}
+                      onDuplicate={() => handleDuplicateChart(c.questionIndex)}
+                      onDelete={() => handleDeleteChart(c.questionIndex)}
+                      onMoveUp={() => moveChart(c.questionIndex, 'up')}
+                      onMoveDown={() => moveChart(c.questionIndex, 'down')}
+                    />
+                  </div>
+                );
+              })}
+              {analysisState.charts.length === 0 && (
+                <div className="col-span-full text-center text-gray-400 py-12">
+                  <p className="mb-2">생성된 그래프가 없습니다.</p>
+                  <p className="text-sm">왼쪽 패널에서 문항을 선택하고 그래프를 생성해주세요.</p>
                 </div>
-              );
-            })}
-            {analysisState.charts.length === 0 && (
-              <div className="col-span-full text-center text-gray-400 py-12">
-                <p className="mb-2">생성된 그래프가 없습니다.</p>
-                <p className="text-sm">왼쪽 패널에서 문항을 선택하고 그래프를 생성해주세요.</p>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </main>
       </div>

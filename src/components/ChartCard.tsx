@@ -43,6 +43,14 @@ interface ChartCardProps {
   onMoveUp?: () => void;
   onMoveDown?: () => void;
   pdfExportMode?: boolean;
+  gridColumns?: number;
+  isReportMode?: boolean;
+  hideTitle?: boolean;
+  dataTable?: {
+    headers: string[];
+    data: any[];
+    questionRowIndex?: number;
+  };
 }
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend, Title);
@@ -285,6 +293,10 @@ const ChartCard: React.FC<ChartCardProps> = ({
   onMoveUp,
   onMoveDown,
   pdfExportMode,
+  gridColumns = 4,
+  isReportMode = false,
+  hideTitle = false,
+  dataTable,
 }) => {
   const [dataTableOpen, setDataTableOpen] = useState(false);
   const chartRef = useRef<any>(null);
@@ -753,6 +765,17 @@ const ChartCard: React.FC<ChartCardProps> = ({
   const baseWidth = 420;
   const chartWidth = baseWidth + (gridSize.w - 1) * 180; // w=1:420, w=2:600, w=3:780...
 
+  // 그리드 크기 변경 핸들러 수정
+  const handleGridSizeChange = (direction: 'w' | 'h', delta: number) => {
+    const newSize = { ...gridSize };
+    if (direction === 'w') {
+      newSize.w = Math.max(1, Math.min(gridColumns, gridSize.w + delta));
+    } else {
+      newSize.h = Math.max(1, Math.min(4, gridSize.h + delta));
+    }
+    onGridSizeChange(newSize);
+  };
+
   if (pdfExportMode) {
     return (
       <div className="bg-white p-2">
@@ -819,23 +842,65 @@ const ChartCard: React.FC<ChartCardProps> = ({
 
   // 모든 차트 타입에서 카드 레이아웃을 반환하도록 통일
   return (
-    <div className="bg-white border border-gray-300 rounded-lg shadow-lg ring-2 ring-blue-200 p-4 flex flex-col" style={{ minHeight: cardMinHeight }}>
-      <div className="flex justify-between items-start mb-4">
-        <div className="flex-1">
-          {/* 헤더 정보가 있을 때만 제목 윗줄에 작게 표시 */}
-          {(() => {
-            let header = null;
-            if (typeof questionRowIndex === 'number' && questionRowIndex > 0 && headers && headers[Number(questionIndex)]) {
-              header = headers[Number(questionIndex)];
-            }
-            return header ? <div className="text-xs text-gray-500 mb-1">[{header}]</div> : null;
-          })()}
-          <h3 className="text-lg font-semibold break-words">
-            {question}
-          </h3>
+    <div className={`relative bg-white rounded-lg shadow-sm border border-gray-200 ${pdfExportMode ? 'p-0' : 'p-4'}`}
+      style={{
+        gridColumn: `span ${gridSize.w}`,
+        gridRow: `span ${gridSize.h}`,
+      }}>
+      {!isReportMode && !pdfExportMode && (
+        <div className="absolute top-2 right-2 flex gap-1">
+          <button
+            onClick={() => onGridSizeChange({ w: Math.max(1, gridSize.w - 1), h: gridSize.h })}
+            className="p-1 text-gray-500 hover:text-gray-700"
+            title="너비 줄이기"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+          <button
+            onClick={() => onGridSizeChange({ w: Math.min(gridColumns, gridSize.w + 1), h: gridSize.h })}
+            className="p-1 text-gray-500 hover:text-gray-700"
+            title="너비 늘리기"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+          <button
+            onClick={() => onGridSizeChange({ w: gridSize.w, h: Math.max(1, gridSize.h - 1) })}
+            className="p-1 text-gray-500 hover:text-gray-700"
+            title="높이 줄이기"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+            </svg>
+          </button>
+          <button
+            onClick={() => onGridSizeChange({ w: gridSize.w, h: gridSize.h + 1 })}
+            className="p-1 text-gray-500 hover:text-gray-700"
+            title="높이 늘리기"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
         </div>
-        {/* 총 응답 갯수: 제목 아래, 오른쪽 정렬, 작은 크기 */}
-      </div>
+      )}
+
+      {!hideTitle && (
+        <div className="flex justify-between items-start mb-4">
+          <div className="flex-1">
+            {headers && typeof questionRowIndex === 'number' && questionRowIndex > 0 && headers[Number(questionIndex)] && (
+              <div className="text-xs text-gray-500 mb-1">[{headers[Number(questionIndex)]}]</div>
+            )}
+            <h3 className="text-lg font-semibold break-words">
+              {question}
+            </h3>
+          </div>
+          {/* 총 응답 갯수: 제목 아래, 오른쪽 정렬, 작은 크기 */}
+        </div>
+      )}
       <div className="flex justify-end mb-2 -mt-2">
         <span className="text-xs text-gray-500">총 응답: {formatNumber(respondentCount || Math.round(data.reduce((sum, item) => sum + item.value, 0)))}개</span>
       </div>
@@ -860,86 +925,114 @@ const ChartCard: React.FC<ChartCardProps> = ({
         </div>
       </div>
       {/* --- 옵션/버튼 영역: 항상 카드 하단에 --- */}
-      {/* 1줄(상단): 드롭다운 메뉴 + 순서변경 */}
-      <div className="flex flex-row flex-wrap items-center gap-1 mt-auto mb-1">
-        <select
-          value={chartType}
-          onChange={e => onChartTypeChange(e.target.value as ChartType)}
-          className="border rounded px-1 py-0.5 text-[11px]"
-        >
-          <option value="vertical">세로 비율</option>
-          <option value="horizontal">가로 비율</option>
-          <option value="verticalStacked">세로 전체 누적</option>
-          <option value="horizontalStacked">가로 전체 누적</option>
-          <option value="pie">원형</option>
-          <option value="donut">도넛형</option>
-          <option value="verticalMatrix">세로 비율(행렬형)</option>
-          <option value="horizontalMatrix">가로 비율(행렬형)</option>
-          {/* 주관식일 때만 워드클라우드/TopN 옵션 노출 */}
-          {questionType === 'open' && <option value="wordcloud">워드 클라우드</option>}
-          {questionType === 'open' && <option value="topN">상위 키워드/문장</option>}
-        </select>
-        <select
-          value={questionType}
-          onChange={e => onQuestionTypeChange(e.target.value as QuestionTypeValue)}
-          className="border rounded px-1 py-0.5 text-[11px]"
-        >
-          <option value="likert">리커트 척도</option>
-          <option value="multiple">객관식</option>
-          <option value="multiple_select">복수응답</option>
-          <option value="open">주관식</option>
-          <option value="matrix">행렬형</option>
-        </select>
-        {(chartType === 'vertical' || chartType === 'horizontal' || chartType === 'verticalStacked' || chartType === 'horizontalStacked' || chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') && (
-          <div className="flex items-center gap-1 text-[11px]">
-            <span>y축</span>
+      {(!isReportMode && !pdfExportMode) && (
+        <>
+          {/* 1줄(상단): 드롭다운 메뉴 + 순서변경 */}
+          <div className="flex flex-row flex-wrap items-center gap-1 mt-auto mb-1">
             <select
-              value={customYMax}
-              onChange={e => setCustomYMax(e.target.value as 'auto' | 100 | 50)}
+              value={chartType}
+              onChange={e => onChartTypeChange(e.target.value as ChartType)}
               className="border rounded px-1 py-0.5 text-[11px]"
             >
-              <option value="auto">자동</option>
-              <option value={100}>100</option>
-              <option value={50}>50</option>
+              <option value="vertical">세로 비율</option>
+              <option value="horizontal">가로 비율</option>
+              <option value="verticalStacked">세로 전체 누적</option>
+              <option value="horizontalStacked">가로 전체 누적</option>
+              <option value="pie">원형</option>
+              <option value="donut">도넛형</option>
+              <option value="verticalMatrix">세로 비율(행렬형)</option>
+              <option value="horizontalMatrix">가로 비율(행렬형)</option>
+              {/* 주관식일 때만 워드클라우드/TopN 옵션 노출 */}
+              {questionType === 'open' && <option value="wordcloud">워드 클라우드</option>}
+              {questionType === 'open' && <option value="topN">상위 키워드/문장</option>}
             </select>
-            <span>막대 두께</span>
             <select
-              value={barThickness}
-              onChange={e => setBarThickness(Number(e.target.value))}
+              value={questionType}
+              onChange={e => onQuestionTypeChange(e.target.value as QuestionTypeValue)}
               className="border rounded px-1 py-0.5 text-[11px]"
             >
-              {barThicknessOptions.map(val => (
-                <option
-                  key={val}
-                  value={val}
-                  style={val === defaultThickness ? { color: '#2563eb', fontWeight: 600 } : {}}
+              <option value="likert">리커트 척도</option>
+              <option value="multiple">객관식</option>
+              <option value="multiple_select">복수응답</option>
+              <option value="open">주관식</option>
+              <option value="matrix">행렬형</option>
+            </select>
+            {(chartType === 'vertical' || chartType === 'horizontal' || chartType === 'verticalStacked' || chartType === 'horizontalStacked' || chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') && (
+              <div className="flex items-center gap-1 text-[11px]">
+                <span>y축</span>
+                <select
+                  value={customYMax}
+                  onChange={e => setCustomYMax(e.target.value as 'auto' | 100 | 50)}
+                  className="border rounded px-1 py-0.5 text-[11px]"
                 >
-                  {val}px{val === defaultThickness ? ' (원본)' : ''}
-                </option>
-              ))}
-            </select>
+                  <option value="auto">자동</option>
+                  <option value={100}>100</option>
+                  <option value={50}>50</option>
+                </select>
+                <span>막대 두께</span>
+                <select
+                  value={barThickness}
+                  onChange={e => setBarThickness(Number(e.target.value))}
+                  className="border rounded px-1 py-0.5 text-[11px]"
+                >
+                  {barThicknessOptions.map(val => (
+                    <option
+                      key={val}
+                      value={val}
+                      style={val === defaultThickness ? { color: '#2563eb', fontWeight: 600 } : {}}
+                    >
+                      {val}px{val === defaultThickness ? ' (원본)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {/* 순서 변경 버튼 */}
+            {onMoveUp && <button onClick={onMoveUp} className="text-xs px-1 text-blue-500 hover:text-blue-700" title="카드 위로 이동">▲</button>}
+            {onMoveDown && <button onClick={onMoveDown} className="text-xs px-1 text-blue-500 hover:text-blue-700" title="카드 아래로 이동">▼</button>}
           </div>
-        )}
-        {/* 순서 변경 버튼 */}
-        {onMoveUp && <button onClick={onMoveUp} className="text-xs px-1 text-blue-500 hover:text-blue-700" title="카드 위로 이동">▲</button>}
-        {onMoveDown && <button onClick={onMoveDown} className="text-xs px-1 text-blue-500 hover:text-blue-700" title="카드 아래로 이동">▼</button>}
-      </div>
-      {/* 2줄(하단): 크기조절/삭제/데이터테이블 */}
-      <div className="flex flex-row flex-wrap items-center gap-1 mb-1">
-        <button onClick={() => onGridSizeChange({ ...gridSize, w: gridSize.w - 1 })} className="text-xs px-1">◀</button>
-        <button onClick={() => onGridSizeChange({ ...gridSize, w: gridSize.w + 1 })} className="text-xs px-1">▶</button>
-        <button onClick={() => onGridSizeChange({ ...gridSize, h: gridSize.h - 1 })} className="text-xs px-1">▲</button>
-        <button onClick={() => onGridSizeChange({ ...gridSize, h: gridSize.h + 1 })} className="text-xs px-1">▼</button>
-        {onDelete && <button onClick={onDelete} className="text-xs px-1 text-red-500">삭제</button>}
-        <button
-          onClick={() => setDataTableOpen(open => !open)}
-          className="text-xs bg-gray-100 text-gray-700 rounded px-2 py-0.5"
-        >
-          {dataTableOpen ? '데이터 테이블 닫기' : '데이터 테이블 열기'}
-        </button>
-      </div>
+          {/* 2줄(하단): 크기조절/삭제/데이터테이블 */}
+          <div className="flex flex-row flex-wrap items-center gap-1 mb-1">
+            <button 
+              onClick={() => handleGridSizeChange('w', -1)} 
+              className="text-xs px-1"
+              disabled={gridSize.w <= 1}
+            >
+              ◀
+            </button>
+            <button 
+              onClick={() => handleGridSizeChange('w', 1)} 
+              className="text-xs px-1"
+              disabled={gridSize.w >= gridColumns}
+            >
+              ▶
+            </button>
+            <button 
+              onClick={() => handleGridSizeChange('h', -1)} 
+              className="text-xs px-1"
+              disabled={gridSize.h <= 1}
+            >
+              ▲
+            </button>
+            <button 
+              onClick={() => handleGridSizeChange('h', 1)} 
+              className="text-xs px-1"
+              disabled={gridSize.h >= 4}
+            >
+              ▼
+            </button>
+            {onDelete && <button onClick={onDelete} className="text-xs px-1 text-red-500">삭제</button>}
+            <button
+              onClick={() => setDataTableOpen(open => !open)}
+              className="text-xs bg-gray-100 text-gray-700 rounded px-2 py-0.5"
+            >
+              {dataTableOpen ? '데이터 테이블 닫기' : '데이터 테이블 열기'}
+            </button>
+          </div>
+        </>
+      )}
       {/* 데이터 테이블 토글 */}
-      {dataTableOpen && (
+      {(!isReportMode && !pdfExportMode && dataTableOpen) && (
         <div className="mt-2 border rounded bg-gray-50 p-2 text-xs">
           <table className="w-full border text-xs">
             <thead>
