@@ -1,10 +1,11 @@
 import React, { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import useSurveyStore from '../store/surveyStore';
-import ChartCard from '../components/ChartCard';
 import { useReactToPrint } from 'react-to-print';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import ChartCard from '../components/ChartCard';
+import useSurveyStore from '../store/surveyStore';
+import { ChartType, QuestionTypeValue } from '../types';
 
 interface ReportPageProps {
   reportState: any;
@@ -27,6 +28,99 @@ const ReportPage: React.FC<ReportPageProps> = ({ reportState, setReportState, an
     onBeforeGetContent: () => Promise.resolve(),
     onAfterPrint: () => {}
   });
+
+  // 보고서 페이지용 핸들러 함수들
+  const handleChartTypeChange = (questionIndex: string, newType: ChartType) => {
+    setReportState((prev: any) => ({
+      ...prev,
+      reportItems: prev.reportItems.map((item: any) =>
+        item.questionIndex === questionIndex ? { ...item, chartType: newType } : item
+      )
+    }));
+  };
+
+  const handleQuestionTypeChange = (questionIndex: string, newType: QuestionTypeValue) => {
+    setReportState((prev: any) => ({
+      ...prev,
+      reportItems: prev.reportItems.map((item: any) =>
+        item.questionIndex === questionIndex ? { 
+          ...item, 
+          questionType: { ...item.questionType, type: newType } 
+        } : item
+      )
+    }));
+  };
+
+  const handleQuestionChange = (questionIndex: string, newQuestion: string) => {
+    setReportState((prev: any) => ({
+      ...prev,
+      reportItems: prev.reportItems.map((item: any) =>
+        item.questionIndex === questionIndex ? { 
+          ...item, 
+          question: newQuestion 
+        } : item
+      )
+    }));
+  };
+
+  const handleDataTableEdit = (questionIndex: string, newData: any[]) => {
+    setReportState((prev: any) => ({
+      ...prev,
+      reportItems: prev.reportItems.map((item: any) =>
+        item.questionIndex === questionIndex ? { ...item, data: newData } : item
+      )
+    }));
+  };
+
+  const handleGridSizeChange = (questionIndex: string, newSize: { w: number; h: number }) => {
+    setReportState((prev: any) => ({
+      ...prev,
+      reportItems: prev.reportItems.map((item: any) =>
+        item.questionIndex === questionIndex ? { ...item, gridSize: newSize } : item
+      )
+    }));
+  };
+
+  const handleDuplicate = (questionIndex: string) => {
+    const itemToDuplicate = reportState.reportItems.find((item: any) => item.questionIndex === questionIndex);
+    if (itemToDuplicate) {
+      const newItem = {
+        ...itemToDuplicate,
+        questionIndex: `${itemToDuplicate.questionIndex}_${Date.now()}`, // 고유 ID 생성
+      };
+      setReportState((prev: any) => ({
+        ...prev,
+        reportItems: [...prev.reportItems, newItem]
+      }));
+    }
+  };
+
+  const handleDelete = (questionIndex: string) => {
+    setReportState((prev: any) => ({
+      ...prev,
+      reportItems: prev.reportItems.filter((item: any) => item.questionIndex !== questionIndex)
+    }));
+  };
+
+  const handleMoveUp = (questionIndex: string) => {
+    setReportState((prev: any) => {
+      const idx = prev.reportItems.findIndex((item: any) => item.questionIndex === questionIndex);
+      if (idx <= 0) return prev;
+      const newItems = [...prev.reportItems];
+      [newItems[idx - 1], newItems[idx]] = [newItems[idx], newItems[idx - 1]];
+      return { ...prev, reportItems: newItems };
+    });
+  };
+
+  const handleMoveDown = (questionIndex: string) => {
+    setReportState((prev: any) => {
+      const idx = prev.reportItems.findIndex((item: any) => item.questionIndex === questionIndex);
+      if (idx === -1 || idx >= prev.reportItems.length - 1) return prev;
+      const newItems = [...prev.reportItems];
+      [newItems[idx], newItems[idx + 1]] = [newItems[idx + 1], newItems[idx]];
+      return { ...prev, reportItems: newItems };
+    });
+  };
 
   // PDF 다운로드 함수: 각 카드별 실제 DOM을 캡처하여 3열 그리드로 PDF에 배치 (gridSize 반영)
   const handleDownloadPDF = async () => {
@@ -151,43 +245,55 @@ const ReportPage: React.FC<ReportPageProps> = ({ reportState, setReportState, an
                     key={item.questionIndex}
                     id={`pdf-export-${item.questionIndex}`}
                     className="border rounded-lg p-4 relative bg-gray-50 flex flex-col"
+                    style={{
+                      gridColumn: `span ${Math.min(item.gridSize?.w || 1, gridColumns)}`,
+                      gridRow: `span ${item.gridSize?.h || 1}`
+                    }}
                   >
                     <ChartCard
-                      {...item}
+                      questionIndex={String(item.questionIndex)}
+                      question={item.question || `문항 ${item.questionIndex}`}
+                      questionType={item.questionType?.type || item.questionType}
+                      chartType={item.chartType}
+                      data={item.data}
+                      colors={item.colors}
+                      respondentCount={item.respondentCount}
+                      avgScore={item.avgScore}
+                      headers={item.headers}
+                      questionRowIndex={item.questionRowIndex}
+                      gridSize={item.gridSize}
                       gridColumns={gridColumns}
                       pdfExportMode={false}
-                      isReportMode={false}
+                      isReportMode={true}
                       hideTitle={false}
-                      onChartTypeChange={() => {}}
-                      onQuestionTypeChange={() => {}}
-                      onDataTableEdit={() => {}}
-                      onGridSizeChange={() => {}}
-                      onDuplicate={() => {}}
-                      onDelete={() => {}}
-                      onMoveUp={() => {}}
-                      onMoveDown={() => {}}
+                      onChartTypeChange={(newType) => handleChartTypeChange(item.questionIndex, newType)}
+                      onQuestionTypeChange={(newType) => {
+                        if (typeof newType === 'string' && !['likert', 'multiple', 'multiple_select', 'open', 'matrix'].includes(newType)) {
+                          handleQuestionChange(item.questionIndex, newType);
+                        } else {
+                          handleQuestionTypeChange(item.questionIndex, newType as QuestionTypeValue);
+                        }
+                      }}
+                      onDataTableEdit={(newData) => handleDataTableEdit(item.questionIndex, newData)}
+                      onGridSizeChange={(newSize) => handleGridSizeChange(item.questionIndex, newSize)}
+                      onDuplicate={() => handleDuplicate(item.questionIndex)}
+                      onDelete={() => handleDelete(item.questionIndex)}
+                      onMoveUp={() => handleMoveUp(item.questionIndex)}
+                      onMoveDown={() => handleMoveDown(item.questionIndex)}
                     />
                     <div className="flex gap-1 mt-auto">
                       <button onClick={() => {
                         if (idx > 0) {
-                          setReportState((prev: any) => {
-                            const arr = [...prev.reportItems];
-                            [arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]];
-                            return { ...prev, reportItems: arr };
-                          });
+                          handleMoveUp(item.questionIndex);
                         }
                       }} disabled={idx === 0} className="text-xs px-2 py-1 bg-gray-200 rounded">▲</button>
                       <button onClick={() => {
                         if (idx < reportState.reportItems.length - 1) {
-                          setReportState((prev: any) => {
-                            const arr = [...prev.reportItems];
-                            [arr[idx], arr[idx + 1]] = [arr[idx + 1], arr[idx]];
-                            return { ...prev, reportItems: arr };
-                          });
+                          handleMoveDown(item.questionIndex);
                         }
                       }} disabled={idx === reportState.reportItems.length - 1} className="text-xs px-2 py-1 bg-gray-200 rounded">▼</button>
                       <button onClick={() => {
-                        setReportState((prev: any) => ({ ...prev, reportItems: prev.reportItems.filter((_: any, i: number) => i !== idx) }));
+                        handleDelete(item.questionIndex);
                       }} className="text-xs px-2 py-1 bg-red-200 text-red-700 rounded">삭제</button>
                     </div>
                   </div>

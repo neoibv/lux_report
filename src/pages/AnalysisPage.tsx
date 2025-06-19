@@ -477,24 +477,11 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
   const handleMoveToReport = (qIdx: any) => {
     const chart = analysisState.charts.find((c: any) => String(c.questionIndex) === String(qIdx));
     if (!chart) return;
-
-    // 데이터 테이블 정보 포함
-    const dataTable = {
-      headers: chart.headers || [],
-      data: chart.data || [],
-      questionRowIndex: chart.questionRowIndex
-    };
-
     setReportState((prev: any) => ({
       ...prev,
       reportItems: [
         ...prev.reportItems,
-        {
-          ...chart,
-          gridSize: chart.gridSize || { w: 1, h: 1 },
-          dataTable,
-          description: ''
-        }
+        { ...chart }
       ]
     }));
   };
@@ -544,87 +531,6 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
       return surveyData.headers[colIdx];
     }
     return null;
-  };
-
-  // PDF 다운로드 함수: 각 카드별 실제 DOM을 캡처하여 3열 그리드로 PDF에 배치 (gridSize 반영)
-  const handleDownloadPDF = async () => {
-    const selectedCharts = analysisState.charts.filter((c: any) => analysisState.reportSelectedCharts.includes(c.questionIndex));
-    if (selectedCharts.length === 0) return;
-
-    const pdf = new jsPDF('p', 'mm', 'a4');
-    const pageWidth = pdf.internal.pageSize.getWidth();
-    const pageHeight = pdf.internal.pageSize.getHeight();
-    const margin = 15;
-    const contentWidth = pageWidth - margin * 2;
-    const colCount = 3;
-    const gap = 8; // 카드 간격(mm)
-    const cardWidth = (contentWidth - gap * (colCount - 1)) / colCount;
-
-    // 3열 그리드의 각 셀 점유 상태를 관리
-    let grid = [] as number[][]; // [row][col] = 1(점유)
-    let y = margin;
-    let row = 0;
-    let maxRowHeight = 0;
-
-    for (let i = 0; i < selectedCharts.length; i++) {
-      const chart = selectedCharts[i];
-      const chartId = `pdf-export-${chart.questionIndex}`;
-      const exportElem = document.getElementById(chartId);
-      if (!exportElem) continue;
-
-      const gridW = chart.gridSize?.w || 1;
-      const gridH = chart.gridSize?.h || 1;
-      const imgW = cardWidth * gridW + gap * (gridW - 1);
-
-      const canvas = await html2canvas(exportElem, { scale: 2, backgroundColor: '#fff', useCORS: true });
-      const imgData = canvas.toDataURL('image/png');
-      const imgProps = pdf.getImageProperties(imgData);
-      // 원본 비율 유지, gridH만큼 높이 확장
-      const baseImgH = (imgProps.height * imgW) / imgProps.width;
-      const imgH = baseImgH * gridH;
-
-      // 현재 row에서 연속 gridW만큼 비어있는 col 찾기
-      let col = 0;
-      let found = false;
-      while (!found) {
-        // grid[row]가 없으면 초기화
-        if (!grid[row]) grid[row] = Array(colCount).fill(0);
-        // col~col+gridW-1까지 비어있는지 확인
-        if (col + gridW <= colCount && grid[row].slice(col, col + gridW).every(v => v === 0)) {
-          found = true;
-          // 점유 표시
-          for (let k = 0; k < gridW; k++) grid[row][col + k] = 1;
-        } else {
-          col++;
-          if (col > colCount - 1) {
-            // 다음 row로
-            row++;
-            y += maxRowHeight + gap;
-            col = 0;
-            maxRowHeight = 0;
-          }
-        }
-      }
-
-      // 페이지 넘김 처리
-      if (y + imgH > pageHeight - margin) {
-        pdf.addPage();
-        y = margin;
-        row = 0;
-        col = 0;
-        grid = [];
-        maxRowHeight = 0;
-        // 다시 col~col+gridW-1 찾기
-        if (!grid[row]) grid[row] = Array(colCount).fill(0);
-        for (let k = 0; k < gridW; k++) grid[row][col + k] = 1;
-      }
-
-      const x = margin + col * (cardWidth + gap);
-      pdf.addImage(imgData, 'PNG', x, y, imgW, imgH);
-      if (imgH > maxRowHeight) maxRowHeight = imgH;
-    }
-
-    pdf.save('분석_그래프.pdf');
   };
 
   // 그리드 컬럼 수 변경 핸들러
@@ -908,13 +814,6 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
                   <option value={4}>4열</option>
                 </select>
               </div>
-              <button
-                onClick={handleDownloadPDF}
-                className="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-xs"
-                disabled={analysisState.reportSelectedCharts.length === 0}
-              >
-                PDF로 다운로드
-              </button>
             </div>
           </div>
           
@@ -939,15 +838,17 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
               disabled={analysisState.reportSelectedCharts.length === 0}
               onClick={() => {
                 const selectedCharts = analysisState.charts.filter((c: any) => analysisState.reportSelectedCharts.includes(c.questionIndex));
+                selectedCharts.forEach((c: any) => {
+                  console.log('보고서로 추가되는 chart 객체:', JSON.stringify(c, null, 2));
+                });
                 setReportState((prev: any) => ({
                   ...prev,
                   reportItems: [
                     ...prev.reportItems,
-                    ...selectedCharts.map((c: any) => ({
+                    ...selectedCharts.map((c: any) => ({ 
                       ...c,
-                      description: '',
-                      question: surveyData.questions[c.questionIndex]?.text || '',
-                      headers: surveyData.headers || [],
+                      question: surveyData.questions[c.questionIndex]?.text || `문항 ${c.questionIndex + 1}`,
+                      headers: surveyData.headers,
                       questionRowIndex: surveyData.questionRowIndex
                     }))
                   ]

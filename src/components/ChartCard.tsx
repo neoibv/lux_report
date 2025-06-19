@@ -776,7 +776,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
     onGridSizeChange(newSize);
   };
 
-  if (pdfExportMode) {
+  if (pdfExportMode && !isReportMode) {
     return (
       <div className="bg-white p-2">
         {/* 헤더/제목 */}
@@ -894,9 +894,29 @@ const ChartCard: React.FC<ChartCardProps> = ({
             {headers && typeof questionRowIndex === 'number' && questionRowIndex > 0 && headers[Number(questionIndex)] && (
               <div className="text-xs text-gray-500 mb-1">[{headers[Number(questionIndex)]}]</div>
             )}
-            <h3 className="text-lg font-semibold break-words">
-              {question}
-            </h3>
+            {!pdfExportMode && (
+              <div className="mb-2">
+                <input
+                  className="text-base font-bold w-full border-b border-gray-200 focus:border-blue-400 outline-none bg-transparent mb-1"
+                  value={question}
+                  onChange={e => {
+                    if (isReportMode) {
+                      // 보고서 모드에서는 제목 편집
+                      onQuestionTypeChange(e.target.value as any);
+                    } else {
+                      // 분석 모드에서는 문항 유형 변경
+                      onQuestionTypeChange(e.target.value as QuestionTypeValue);
+                    }
+                  }}
+                  onBlur={e => {/* 필요시 저장 로직 */}}
+                />
+              </div>
+            )}
+            {pdfExportMode && (
+              <div className="mb-2">
+                <div className="text-base font-bold">{question}</div>
+              </div>
+            )}
           </div>
           {/* 총 응답 갯수: 제목 아래, 오른쪽 정렬, 작은 크기 */}
         </div>
@@ -1031,24 +1051,85 @@ const ChartCard: React.FC<ChartCardProps> = ({
           </div>
         </>
       )}
+
+      {/* 보고서 모드에서의 간소화된 옵션 */}
+      {isReportMode && !pdfExportMode && (
+        <div className="flex flex-row flex-wrap items-center gap-1 mt-auto mb-1">
+          <select
+            value={chartType}
+            onChange={e => onChartTypeChange(e.target.value as ChartType)}
+            className="border rounded px-1 py-0.5 text-[11px]"
+          >
+            <option value="vertical">세로 비율</option>
+            <option value="horizontal">가로 비율</option>
+            <option value="verticalStacked">세로 전체 누적</option>
+            <option value="horizontalStacked">가로 전체 누적</option>
+            <option value="pie">원형</option>
+            <option value="donut">도넛형</option>
+            <option value="verticalMatrix">세로 비율(행렬형)</option>
+            <option value="horizontalMatrix">가로 비율(행렬형)</option>
+            {questionType === 'open' && <option value="wordcloud">워드 클라우드</option>}
+            {questionType === 'open' && <option value="topN">상위 키워드/문장</option>}
+          </select>
+          <button 
+            onClick={() => handleGridSizeChange('w', -1)} 
+            className="text-xs px-1"
+            disabled={gridSize.w <= 1}
+            title="너비 줄이기"
+          >
+            ◀
+          </button>
+          <button 
+            onClick={() => handleGridSizeChange('w', 1)} 
+            className="text-xs px-1"
+            disabled={gridSize.w >= gridColumns}
+            title="너비 늘리기"
+          >
+            ▶
+          </button>
+          <button 
+            onClick={() => handleGridSizeChange('h', -1)} 
+            className="text-xs px-1"
+            disabled={gridSize.h <= 1}
+            title="높이 줄이기"
+          >
+            ▲
+          </button>
+          <button 
+            onClick={() => handleGridSizeChange('h', 1)} 
+            className="text-xs px-1"
+            disabled={gridSize.h >= 4}
+            title="높이 늘리기"
+          >
+            ▼
+          </button>
+          <button
+            onClick={() => setDataTableOpen(open => !open)}
+            className="text-xs bg-gray-100 text-gray-700 rounded px-2 py-0.5"
+          >
+            {dataTableOpen ? '데이터 테이블 닫기' : '데이터 테이블 열기'}
+          </button>
+        </div>
+      )}
+
       {/* 데이터 테이블 토글 */}
-      {(!isReportMode && !pdfExportMode && dataTableOpen) && (
+      {(!pdfExportMode && dataTableOpen) && (
         <div className="mt-2 border rounded bg-gray-50 p-2 text-xs">
           <table className="w-full border text-xs">
             <thead>
               <tr className="bg-gray-100">
                 <th className="p-1 text-center">순서</th>
                 <th className="p-1 text-center">응답 항목
-                  <button onClick={() => handleSort('label')} className="ml-1 text-gray-500">▲▼</button>
+                  {!isReportMode && <button onClick={() => handleSort('label')} className="ml-1 text-gray-500">▲▼</button>}
                 </th>
                 <th className="p-1 text-center">응답갯수
-                  <button onClick={() => handleSort('value')} className="ml-1 text-gray-500">▲▼</button>
+                  {!isReportMode && <button onClick={() => handleSort('value')} className="ml-1 text-gray-500">▲▼</button>}
                 </th>
                 <th className="p-1 text-center">비율(%)
-                  <button onClick={() => handleSort('percent')} className="ml-1 text-gray-500">▲▼</button>
+                  {!isReportMode && <button onClick={() => handleSort('percent')} className="ml-1 text-gray-500">▲▼</button>}
                 </th>
                 <th className="p-1 text-center">기타응답</th>
-                <th className="p-1 text-center">이동</th>
+                {!isReportMode && <th className="p-1 text-center">이동</th>}
               </tr>
             </thead>
             <tbody>
@@ -1058,80 +1139,100 @@ const ChartCard: React.FC<ChartCardProps> = ({
                   <tr key={row.id}>
                     <td className="text-center">{idx + 1}</td>
                     <td className="text-center">
-                      <input
-                        className="border rounded px-1 py-0.5 w-full"
-                        value={row.label}
-                        onChange={e => {
-                          const newData = [...localTableData];
-                          const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
-                          newData[realIdx] = { ...row, label: e.target.value };
-                          setLocalTableData(newData);
-                        }}
-                      />
+                      {!isReportMode ? (
+                        <input
+                          className="border rounded px-1 py-0.5 w-full"
+                          value={row.label}
+                          onChange={e => {
+                            const newData = [...localTableData];
+                            const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
+                            newData[realIdx] = { ...row, label: e.target.value };
+                            setLocalTableData(newData);
+                          }}
+                        />
+                      ) : (
+                        row.label
+                      )}
                     </td>
                     <td className="text-center">
-                      <input
-                        type="number"
-                        className="border rounded px-1 py-0.5 w-16 text-right"
-                        value={row.value}
-                        min={0}
-                        onChange={e => {
-                          const newVal = Number(e.target.value);
-                          const newData = [...localTableData];
-                          const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
-                          newData[realIdx] = { ...row, value: newVal };
-                          setLocalTableData(newData);
-                        }}
-                      />
+                      {!isReportMode ? (
+                        <input
+                          type="number"
+                          className="border rounded px-1 py-0.5 w-16 text-right"
+                          value={row.value}
+                          min={0}
+                          onChange={e => {
+                            const newVal = Number(e.target.value);
+                            const newData = [...localTableData];
+                            const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
+                            newData[realIdx] = { ...row, value: newVal };
+                            setLocalTableData(newData);
+                          }}
+                        />
+                      ) : (
+                        row.value
+                      )}
                     </td>
                     <td className="text-center">
-                      <input
-                        type="number"
-                        className="border rounded px-1 py-0.5 w-16 text-right"
-                        value={percent}
-                        min={0}
-                        max={100}
-                        step={0.1}
-                        onChange={e => {
-                          const newPercent = Number(e.target.value);
-                          const newVal = Math.round((newPercent / 100) * totalResponses);
-                          const newData = [...localTableData];
-                          const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
-                          newData[realIdx] = { ...row, value: newVal };
-                          setLocalTableData(newData);
-                        }}
-                      />
+                      {!isReportMode ? (
+                        <input
+                          type="number"
+                          className="border rounded px-1 py-0.5 w-16 text-right"
+                          value={percent}
+                          min={0}
+                          max={100}
+                          step={0.1}
+                          onChange={e => {
+                            const newPercent = Number(e.target.value);
+                            const newVal = Math.round((newPercent / 100) * totalResponses);
+                            const newData = [...localTableData];
+                            const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
+                            newData[realIdx] = { ...row, value: newVal };
+                            setLocalTableData(newData);
+                          }}
+                        />
+                      ) : (
+                        percent
+                      )}
                     </td>
                     <td className="text-center">
-                      <input
-                        type="checkbox"
-                        checked={!!row.isOther}
-                        onChange={e => {
-                          const newData = [...localTableData];
-                          const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
-                          newData[realIdx] = { ...row, isOther: e.target.checked };
-                          setLocalTableData(newData);
-                        }}
-                      />
+                      {!isReportMode ? (
+                        <input
+                          type="checkbox"
+                          checked={!!row.isOther}
+                          onChange={e => {
+                            const newData = [...localTableData];
+                            const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
+                            newData[realIdx] = { ...row, isOther: e.target.checked };
+                            setLocalTableData(newData);
+                          }}
+                        />
+                      ) : (
+                        row.isOther ? 'O' : ''
+                      )}
                     </td>
-                    <td className="text-center">
-                      <button onClick={() => moveRow(idx, -1)} disabled={idx === 0} className="text-xs px-1">▲</button>
-                      <button onClick={() => moveRow(idx, 1)} disabled={idx === sortedTableData.length - 1} className="text-xs px-1">▼</button>
-                    </td>
+                    {!isReportMode && (
+                      <td className="text-center">
+                        <button onClick={() => moveRow(idx, -1)} disabled={idx === 0} className="text-xs px-1">▲</button>
+                        <button onClick={() => moveRow(idx, 1)} disabled={idx === sortedTableData.length - 1} className="text-xs px-1">▼</button>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
             </tbody>
           </table>
           {/* 초기화 버튼 추가 */}
-          <div className="mt-2 flex justify-end">
-            <button
-              className="text-xs bg-gray-200 text-gray-700 rounded px-2 py-0.5 hover:bg-blue-100"
-              onClick={() => setLocalTableData(withRowId(data))}
-            >
-              초기화
-            </button>
-          </div>
+          {!isReportMode && (
+            <div className="mt-2 flex justify-end">
+              <button
+                className="text-xs bg-gray-200 text-gray-700 rounded px-2 py-0.5 hover:bg-blue-100"
+                onClick={() => setLocalTableData(withRowId(data))}
+              >
+                초기화
+              </button>
+            </div>
+          )}
         </div>
       )}
       {/* 워드클라우드/TopN 차트 렌더링 시 프로그레스/에러 안내 */}
