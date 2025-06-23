@@ -42,6 +42,8 @@ const chartTypes = [
   { value: 'donut', label: '도넛형' },
   { value: 'verticalMatrix', label: '세로 비율(행렬형)' },
   { value: 'horizontalMatrix', label: '가로 비율(행렬형)' },
+  { value: 'verticalMatrixStacked', label: '세로 누적 비교(행렬형)' },
+  { value: 'horizontalMatrixStacked', label: '가로 누적 비교(행렬형)' },
   { value: 'wordcloud', label: '워드 클라우드 (주관식)' },
   { value: 'topN', label: '상위 키워드/문장 (주관식)' },
 ];
@@ -226,52 +228,90 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
             matrixTitle = '제목 없음';
           }
         }
-        // 각 소문항별(문항별) 평균점수 계산 및 뒷부분 텍스트 추출
-        const averages = groupQs.map((mq: any) => {
-          const fullText = mq.text || '';
-          const diff = fullText.startsWith(matrixTitle) ? fullText.slice(matrixTitle.length).trim() : fullText;
-          const values = processedRows.map((row: any[]) => row[Number(mq.columnIndex)])
-            .filter((v: any) => typeof v === 'string' && v.trim() !== '') as string[];
-          // 자동 scoreMap 생성
-          let scoreMap = mq.scoreMap;
-          if (!scoreMap && mq.options && mq.options.length === 5) {
-            scoreMap = mq.options.reduce((acc: any, opt: string, idx: number) => {
-              acc[opt.trim().toLowerCase()] = 5 - idx;
-              return acc;
-            }, {});
-          }
-          let totalScore = 0, totalCount = 0;
-          values.forEach(v => {
-            const normV = v.trim().toLowerCase();
-            if (!scoreMap || scoreMap[normV] === undefined) return; // 기타응답 제외
-            const score = scoreMap[normV];
-            totalScore += score;
-            totalCount += 1;
+        
+        let chartDataForCard: any[] = [];
+        let responseOrderForCard: string[] | undefined = undefined;
+
+        // 선택된 차트 유형에 따라 데이터 가공 분기
+        if (analysisState.selectedChartType === 'verticalMatrixStacked' || analysisState.selectedChartType === 'horizontalMatrixStacked') {
+          // 누적 비교 차트용 데이터 가공
+          const detailedData: { label: string, value: number }[] = [];
+          const firstQuestionWithOptions = groupQs.find(mq => mq.options || mq.scoreMap);
+          responseOrderForCard = firstQuestionWithOptions?.options || (firstQuestionWithOptions?.scoreMap ? Object.keys(firstQuestionWithOptions.scoreMap) : []);
+
+          groupQs.forEach(mq => {
+            const subQuestionLabel = (mq.text || '').startsWith(matrixTitle) ? (mq.text || '').slice(matrixTitle.length).trim() : mq.text;
+            const values = processedRows.map((row: any[]) => row[Number(mq.columnIndex)])
+              .filter((v: any) => typeof v === 'string' && v.trim() !== '') as string[];
+            
+            const counts: Record<string, number> = {};
+            values.forEach(v => {
+              counts[v] = (counts[v] || 0) + 1;
+            });
+
+            // 그룹의 첫 문항에서 결정된 responseOrder를 기준으로 데이터 생성
+            if (responseOrderForCard) {
+              responseOrderForCard.forEach(option => {
+                detailedData.push({
+                  label: `${subQuestionLabel}_${option}`,
+                  value: counts[option] || 0
+                });
+              });
+            }
           });
-          return {
-            label: diff,
-            value: totalCount > 0 ? Math.round((totalScore / totalCount) * 100) / 100 : 0,
-            ...(mq?.scores ? { scores: mq.scores } : {})
-          };
-        });
+          chartDataForCard = detailedData;
+        } else {
+          // 기존 평균 점수 차트용 데이터 가공
+          chartDataForCard = groupQs.map((mq: any) => {
+            const fullText = mq.text || '';
+            const diff = fullText.startsWith(matrixTitle) ? fullText.slice(matrixTitle.length).trim() : fullText;
+            const values = processedRows.map((row: any[]) => row[Number(mq.columnIndex)])
+              .filter((v: any) => typeof v === 'string' && v.trim() !== '') as string[];
+            
+            let scoreMap = mq.scoreMap;
+            if (!scoreMap && mq.options && mq.options.length === 5) {
+              scoreMap = mq.options.reduce((acc: any, opt: string, idx: number) => {
+                acc[opt.trim().toLowerCase()] = 5 - idx;
+                return acc;
+              }, {});
+            }
+            let totalScore = 0, totalCount = 0;
+            values.forEach(v => {
+              const normV = v.trim().toLowerCase();
+              if (!scoreMap || scoreMap[normV] === undefined) return;
+              const score = scoreMap[normV];
+              totalScore += score;
+              totalCount += 1;
+            });
+            return {
+              label: diff,
+              value: totalCount > 0 ? Math.round((totalScore / totalCount) * 100) / 100 : 0,
+              ...(mq?.scores ? { scores: mq.scores } : {})
+            };
+          });
+        }
+        
         // 응답자 수 계산(첫 소문항 기준)
         const respondentCount = processedRows.filter((row: any[]) => {
           const value = row[Number(groupQs[0].columnIndex)];
           return typeof value === 'string' && value.trim() !== '';
         }).length;
+
+        const isStacked = analysisState.selectedChartType === 'verticalMatrixStacked' || analysisState.selectedChartType === 'horizontalMatrixStacked';
+        const avgScore = !isStacked && chartDataForCard.length > 0 ? chartDataForCard[0].value : undefined;
+
         // ChartCard에 전달 (matrix)
-        let avgScore = averages[0].value;
         newCharts.push({
           questionIndex: `matrix_${qt.matrixGroupId}`,
           chartType: analysisState.selectedChartType,
           questionType: { ...qt, type: 'matrix' },
           gridSize: { w: 1, h: 1 },
-          data: averages, // [{label: 소문항, value: 평균점수}]
+          data: chartDataForCard, 
           respondentCount,
-          matrixTitle, // 제목
-          yMax: 5, // y축 최대값
+          matrixTitle,
+          responseOrder: responseOrderForCard, // responseOrder 전달
           ...(qt?.scores ? { scores: qt.scores } : {}),
-          avgScore: avgScore // matrix는 개별 소문항별로 value에 평균점수 포함, 카드에서 value 사용
+          avgScore: avgScore
         });
         return;
       }

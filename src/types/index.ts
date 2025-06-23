@@ -1,4 +1,4 @@
-export type ChartType = 'vertical' | 'horizontal' | 'verticalStacked' | 'horizontalStacked' | 'pie' | 'donut' | 'verticalMatrix' | 'horizontalMatrix' | 'wordcloud' | 'topN'; 
+export type ChartType = 'vertical' | 'horizontal' | 'verticalStacked' | 'horizontalStacked' | 'pie' | 'donut' | 'verticalMatrix' | 'horizontalMatrix' | 'verticalMatrixStacked' | 'horizontalMatrixStacked' | 'wordcloud' | 'topN'; 
 
 export interface Response {
   id?: string;

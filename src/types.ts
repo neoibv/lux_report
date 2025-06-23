@@ -11,7 +11,7 @@ export interface QuestionType {
   scoreMap?: Record<string, number>;
 }
 
-export type ChartType = 'vertical' | 'horizontal' | 'pie' | 'donut' | 'verticalMatrix' | 'horizontalMatrix' | 'verticalStacked' | 'horizontalStacked';
+export type ChartType = 'vertical' | 'horizontal' | 'pie' | 'donut' | 'verticalMatrix' | 'horizontalMatrix' | 'verticalStacked' | 'horizontalStacked' | 'verticalMatrixStacked' | 'horizontalMatrixStacked' | 'wordcloud' | 'topN';
 
 export interface Question {
   id: string;

@@ -273,6 +273,7 @@ function getStackedChartData(
 // barThickness 디폴트 계산 함수
 function getDefaultBarThickness(chartType: ChartType, dataLen: number) {
   if (chartType === 'verticalStacked' || chartType === 'horizontalStacked') return 65;
+  if (chartType === 'verticalMatrixStacked' || chartType === 'horizontalMatrixStacked') return 65;
   if (chartType === 'vertical' || chartType === 'horizontal') return 54;
   if (chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') {
     // 데이터 개수에 따라 자동(최소 30, 최대 90, 300/개수)
@@ -312,6 +313,70 @@ function extractSentenceCounts(data: Response[]): { text: string; value: number 
     map[text] = (map[text] || 0) + 1;
   });
   return Object.entries(map).map(([text, value]) => ({ text, value }));
+}
+
+// --- 행렬형 누적 비교 차트 데이터 생성 함수 ---
+function getMatrixStackedChartData(
+  data: Array<{ label: string; value: number; isOther?: boolean; id?: string }>,
+  responseOrder: string[] | undefined,
+  likertColors: string[],
+  barThickness: number
+) {
+  console.log('[MatrixStacked] Input Data:', data);
+  console.log('[MatrixStacked] Response Order:', responseOrder);
+
+  const subQuestions = new Set<string>();
+  data.forEach(item => {
+    const parts = item.label.split('_');
+    if (parts.length >= 2) {
+      subQuestions.add(parts[0]);
+    }
+  });
+  const subQuestionsArray = Array.from(subQuestions);
+  console.log('[MatrixStacked] SubQuestions:', subQuestionsArray);
+
+  const likertResponsesArray = responseOrder || Array.from(new Set(data.map(item => {
+    const parts = item.label.split('_');
+    return parts.length >= 2 ? parts.slice(1).join('_') : '';
+  }).filter(Boolean)));
+  console.log('[MatrixStacked] Likert Responses:', likertResponsesArray);
+
+  const totalsBySubQuestion: Record<string, number> = {};
+  subQuestionsArray.forEach(sq => {
+    totalsBySubQuestion[sq] = data
+      .filter(d => d.label.startsWith(sq + '_'))
+      .reduce((sum, item) => sum + item.value, 0);
+  });
+  console.log('[MatrixStacked] Totals by SubQuestion:', totalsBySubQuestion);
+
+  const datasets = likertResponsesArray.map((likertResponse, likertIndex) => {
+    const dataForThisDataset = subQuestionsArray.map((subQuestion) => {
+      const fullLabel = `${subQuestion}_${likertResponse}`;
+      const item = data.find(d => d.label === fullLabel);
+      const totalForSubQuestion = totalsBySubQuestion[subQuestion];
+      const percentage = item && totalForSubQuestion ? Math.round((item.value / totalForSubQuestion) * 100) : 0;
+      return percentage;
+    });
+
+    return {
+      label: likertResponse,
+      data: dataForThisDataset,
+      backgroundColor: likertColors[likertIndex % likertColors.length],
+      borderRadius: 0,
+      barPercentage: 0.75,
+      categoryPercentage: 0.85,
+      barThickness,
+    };
+  });
+  console.log('[MatrixStacked] Final Datasets:', datasets);
+
+  const finalChartData = {
+    labels: subQuestionsArray,
+    datasets
+  };
+  console.log('[MatrixStacked] Final Chart Config:', finalChartData);
+  
+  return finalChartData;
 }
 
 const ChartCard: React.FC<ChartCardProps> = ({
@@ -364,7 +429,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
       // 7개 이상이면 카드 영역에 맞게 40 이하로 자동 조정
       return Math.max(24, Math.floor(320 / dataLen));
     }
-    if ((chartType === 'verticalStacked' || chartType === 'horizontalStacked') && dataLen >= 7) {
+    if ((chartType === 'verticalStacked' || chartType === 'horizontalStacked' || chartType === 'verticalMatrixStacked' || chartType === 'horizontalMatrixStacked') && dataLen >= 7) {
       return Math.max(24, Math.floor(320 / dataLen));
     }
     return getDefaultBarThickness(chartType, dataLen);
@@ -651,6 +716,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
   }, [chartType, chartData.labels, chartData.values, questionType, customYMax, chartLabels]);
 
   const matrixChartDataConfig = useMemo(() => getMatrixChartData(chartData.sortedData, respondentCount, matrixColors, barThickness), [chartData.sortedData, respondentCount, barThickness]);
+  const matrixStackedChartDataConfig = useMemo(() => getMatrixStackedChartData(chartData.sortedData, responseOrder, likertColors, barThickness), [chartData.sortedData, responseOrder, barThickness]);
   const generalChartDataConfig = useMemo(() => {
     // 차트 전용 데이터(chartData.sortedData)를 사용하도록 수정
     const base = getGeneralChartData(chartData.sortedData, questionType, respondentCount, palette, likertColors, generateColorSet, barThickness);
@@ -670,6 +736,68 @@ const ChartCard: React.FC<ChartCardProps> = ({
   }, [chartData.sortedData, respondentCount, questionType, barThickness]);
 
   // --- 옵션 useMemo 분리 ---
+  const matrixStackedChartOptions = useMemo(() => ({
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { 
+        display: false,
+      },
+      tooltip: { enabled: true, padding: 10, backgroundColor: 'rgba(0, 0, 0, 0.8)' },
+      title: { display: false },
+      datalabels: {
+        display: true,
+        color: '#000',
+        font: { weight: 'bold' },
+        anchor: 'center',
+        align: 'center',
+        formatter: (value: number) => value === undefined || value === null ? '' : `${formatNumber(value)}%`,
+      }
+    },
+    indexAxis: chartType === 'verticalMatrixStacked' ? 'x' : 'y',
+    scales: chartType === 'verticalMatrixStacked'
+      ? {
+          x: { 
+            stacked: true, 
+            grid: { display: true, color: '#e5e7eb' }, 
+            ticks: { 
+              display: true,
+              maxRotation: 45,
+              minRotation: 0
+            } 
+          },
+          y: { 
+            stacked: true, 
+            beginAtZero: true, 
+            max: 100, 
+            ticks: { 
+              display: true,
+              callback: (v: any) => `${v}%` 
+            } 
+          },
+        }
+      : {
+          x: { 
+            stacked: true, 
+            beginAtZero: true, 
+            max: 100, 
+            ticks: { 
+              display: true,
+              callback: (v: any) => `${v}%` 
+            } 
+          },
+          y: { 
+            stacked: true, 
+            grid: { display: true, color: '#e5e7eb' }, 
+            ticks: { 
+              display: true,
+              maxRotation: 45,
+              minRotation: 0
+            } 
+          },
+        },
+  }), [chartType]);
+
   const stackedChartOptions = useMemo(() => ({
     responsive: true,
     maintainAspectRatio: false,
@@ -742,6 +870,8 @@ const ChartCard: React.FC<ChartCardProps> = ({
 
   const renderChart = () => {
     const isMatrixChart = chartType === 'verticalMatrix' || chartType === 'horizontalMatrix';
+    const isMatrixStackedChart = chartType === 'verticalMatrixStacked' || chartType === 'horizontalMatrixStacked';
+    
     if (isMatrixChart) {
       return (
         <Bar
@@ -750,6 +880,32 @@ const ChartCard: React.FC<ChartCardProps> = ({
           data={matrixChartDataConfig}
           options={matrixChartOptions as ChartOptions<'bar'>}
         />
+      );
+    }
+    if (isMatrixStackedChart) {
+      return (
+        <>
+          <Bar
+            key={chartKey}
+            ref={chartRef}
+            data={matrixStackedChartDataConfig}
+            options={matrixStackedChartOptions as ChartOptions<'bar'>}
+          />
+          {/* 커스텀 범례 */}
+          {responseOrder && responseOrder.length > 0 && (
+            <div className="flex justify-center items-center gap-4 mt-2 mb-2">
+              {responseOrder.map((label, index) => (
+                <div key={index} className="flex items-center gap-1">
+                  <div 
+                    className="w-3 h-3 rounded-sm"
+                    style={{ backgroundColor: likertColors[index % likertColors.length] }}
+                  />
+                  <span className="text-xs text-gray-700">{label}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       );
     }
     if (chartType === 'verticalStacked' || chartType === 'horizontalStacked') {
@@ -1153,6 +1309,8 @@ const ChartCard: React.FC<ChartCardProps> = ({
                 <option value="donut">도넛형</option>
                 <option value="verticalMatrix">세로 비율(행렬형)</option>
                 <option value="horizontalMatrix">가로 비율(행렬형)</option>
+                <option value="verticalMatrixStacked">세로 누적 비교(행렬형)</option>
+                <option value="horizontalMatrixStacked">가로 누적 비교(행렬형)</option>
                 {questionType === 'open' && <option value="wordcloud">워드 클라우드</option>}
                 {questionType === 'open' && <option value="topN">상위 키워드/문장</option>}
               </select>
