@@ -51,6 +51,7 @@ interface ChartCardProps {
     data: any[];
     questionRowIndex?: number;
   };
+  onTitleChange: (newTitle: string) => void;
 }
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend, Title);
@@ -68,40 +69,43 @@ const likertColors = [
   '#f43f5e', // 매우불만족(1점)
 ];
 
-// 행렬형 전용 컬러 팔레트 (녹색/민트/청록 계열, 회색 제외)
+// 행렬형 전용 컬러 팔레트 (채도 빠진 짙은 남색으로 통일)
 const matrixColors = [
-  '#43E97B', // 연두
-  '#38F9D7', // 청록
-  '#00B894', // 진한 민트
-  '#00CEC9', // 밝은 청록
-  '#0984E3', // 선명한 파랑
-  '#6C5CE7', // 보라
-  '#00BFAE', // 진한 청록
-  '#1DE9B6', // 밝은 민트
+  '#1e293b', '#1e293b', '#1e293b', '#1e293b',
+  '#1e293b', '#1e293b', '#1e293b', '#1e293b',
+  '#1e293b', '#1e293b', '#1e293b', '#1e293b'
 ];
 
-// 객관식 전용 컬러 팔레트 (보라/핑크/남색/자주/청보라 등, 회색 제외)
+// 객관식 전용 컬러 팔레트 (비비드한 무지개 계열, 12단계)
 const objectiveColors = [
-  '#8E44AD', // 진보라
-  '#6C3483', // 자주
-  '#BB8FCE', // 연보라
-  '#F1948A', // 연핑크
-  '#D35400', // 진한 오렌지
-  '#F7CA18', // 노랑
-  '#5D6D7E', // 남색
-  '#154360', // 진한 남색
+  '#ef4444', // 선명한 빨강
+  '#f97316', // 선명한 주황
+  '#eab308', // 선명한 노랑
+  '#22c55e', // 선명한 초록
+  '#06b6d4', // 선명한 청록
+  '#3b82f6', // 선명한 파랑
+  '#8b5cf6', // 선명한 보라
+  '#ec4899', // 선명한 핑크
+  '#f59e0b', // 선명한 주황2
+  '#10b981', // 선명한 민트
+  '#6366f1', // 선명한 인디고
+  '#84cc16'  // 선명한 라임
 ];
 
-// 복수응답 전용 컬러 팔레트 (오렌지/노랑/갈색/베이지/레드오렌지 등, 회색 제외)
+// 복수응답 전용 컬러 팔레트 (갈색~베이지~카키 계열 베리에이션, 12단계, 밝은색부터)
 const multiSelectColors = [
-  '#F39C12', // 오렌지
-  '#E67E22', // 진한 오렌지
-  '#CA6F1E', // 갈색
-  '#F6E58D', // 연노랑
-  '#F9CA24', // 노랑
-  '#F8C471', // 베이지
-  '#B9770E', // 진한 갈색
-  '#FAD7A0', // 연베이지
+  '#8b4513', // 새들 갈색 (가장 밝은)
+  '#b8860b', // 다크골든로드
+  '#daa520', // 골든로드 갈색
+  '#d2691e', // 초콜릿 갈색
+  '#cd853f', // 페루 갈색
+  '#a0522d', // 시에나 갈색
+  '#8b7355', // 베이지 갈색
+  '#6b5b47', // 연한 갈색
+  '#5d4e37', // 중간 갈색
+  '#4b3a2f', // 현재 갈색
+  '#3d2317', // 짙은 갈색
+  '#2d1810'  // 매우 짙은 갈색 (가장 어두운)
 ];
 
 // 기존 palette는 객관식에만 사용하도록 변경
@@ -112,18 +116,48 @@ function formatNumber(n: number) {
   return n.toLocaleString('ko-KR');
 }
 
+// 배경색에 따라 적절한 텍스트 색상(검/흰)을 반환하는 헬퍼 함수
+function hexToRgb(hex: string) {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? {
+        r: parseInt(result[1], 16),
+        g: parseInt(result[2], 16),
+        b: parseInt(result[3], 16)
+    } : null;
+}
+
+function getTextColorForBackground(hexColor: string) {
+    if (!hexColor) return '#000';
+    const rgb = hexToRgb(hexColor);
+    if (!rgb) return '#000';
+    const luminance = (0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b) / 255;
+    return luminance > 0.6 ? '#000' : '#fff';
+}
+
 // 라벨 가공 함수 추가
 function ellipsisLabel(label: string, max = 10) {
   return label.length > max ? label.slice(0, max) + '...' : label;
 }
 
-// 기존 palette가 부족할 때 자동으로 색상 생성
-function generateColorSet(n: number, baseColors: string[]) {
-  // baseColors에서 OTHER_GRAY를 제외하고 n개만큼 반복
-  const filtered = baseColors.filter(c => c.toLowerCase() !== OTHER_GRAY.toLowerCase());
-  const colors = [];
-  for (let i = 0; i < n; i++) {
-    colors.push(filtered[i % filtered.length]);
+// 팔레트에서 N개의 색상을 분산하여 추출하는 함수로 변경
+function generateColorSet(n: number, palette: string[]): string[] {
+  if (n <= 0) return [];
+  const filteredPalette = palette.filter(c => c.toLowerCase() !== OTHER_GRAY.toLowerCase());
+  const len = filteredPalette.length;
+  if (len === 0) return Array(n).fill('#cccccc');
+
+  const colors: string[] = [];
+  if (n > len) {
+    // 필요한 색상이 팔레트보다 많으면, 팔레트를 반복 사용
+    for (let i = 0; i < n; i++) {
+      colors.push(filteredPalette[i % len]);
+    }
+  } else {
+    // 팔레트에서 필요한 개수만큼 건너뛰며 색상 선택
+    const step = Math.floor(len / n);
+    for (let i = 0; i < n; i++) {
+      colors.push(filteredPalette[i * step]);
+    }
   }
   return colors;
 }
@@ -145,13 +179,16 @@ function findCommonPrefix(strings: string[]) {
 
 // --- 데이터 가공 함수 분리 ---
 function getMatrixChartData(
-  data: Array<{ label: string; value: number; isOther?: boolean; id: string }>,
+  data: Array<{ label: string; value: number; isOther?: boolean; id?: string }>,
   respondentCount: number | undefined,
   matrixColors: string[],
   barThickness: number
 ) {
   const datasetData = data.map(d => d.value);
-  const backgroundColor = data.map((d, i) => d.isOther ? OTHER_GRAY : matrixColors[i % matrixColors.length]);
+  const numDataPoints = data.filter(d => !d.isOther).length;
+  const distributedColors = generateColorSet(numDataPoints, matrixColors);
+  let colorIndex = 0;
+  const backgroundColor = data.map(d => d.isOther ? OTHER_GRAY : distributedColors[colorIndex++]);
   return {
     labels: data.map(d => d.label),
     datasets: [{
@@ -166,7 +203,7 @@ function getMatrixChartData(
 }
 
 function getGeneralChartData(
-  data: Array<{ label: string; value: number; isOther?: boolean; id: string }>,
+  data: Array<{ label: string; value: number; count?:number; isOther?: boolean; id?: string }>,
   questionType: QuestionTypeValue,
   respondentCount: number | undefined,
   palette: string[],
@@ -177,16 +214,19 @@ function getGeneralChartData(
   const totalResponses = respondentCount !== undefined ? respondentCount : Math.round(data.reduce((sum, item) => sum + item.value, 0));
   let datasetData: number[] = [];
   let backgroundColor: string[] = [];
+  const numDataPoints = data.filter(d => !d.isOther).length;
+  let colorIndex = 0;
+
   if (questionType === 'multiple_select') {
     const sum = data.reduce((acc, d) => acc + d.value, 0);
     datasetData = sum ? data.map(v => Math.round((v.value / sum) * 1000) / 10) : data.map(() => 0);
-    backgroundColor = data.map((d, i) => d.isOther ? OTHER_GRAY : generateColorSet(data.length, multiSelectColors)[i]);
+    backgroundColor = data.map((d) => d.isOther ? OTHER_GRAY : generateColorSet(numDataPoints, multiSelectColors)[colorIndex++]);
   } else if (questionType === 'likert' || questionType === 'matrix') {
     datasetData = totalResponses ? data.map(v => Math.round((v.value / totalResponses) * 1000) / 10) : data.map(() => 0);
     backgroundColor = data.map((d, i) => d.isOther ? OTHER_GRAY : likertColors[i % likertColors.length]);
   } else {
     datasetData = totalResponses ? data.map(v => Math.round((v.value / totalResponses) * 1000) / 10) : data.map(() => 0);
-    backgroundColor = data.map((d, i) => d.isOther ? OTHER_GRAY : generateColorSet(data.length, objectiveColors)[i]);
+    backgroundColor = data.map((d) => d.isOther ? OTHER_GRAY : generateColorSet(numDataPoints, objectiveColors)[colorIndex++]);
   }
   return {
     labels: data.map(d => d.label),
@@ -203,7 +243,7 @@ function getGeneralChartData(
 
 // --- 스택형(전체 누적) 차트 데이터 생성 함수 ---
 function getStackedChartData(
-  data: Array<{ label: string; value: number; isOther?: boolean; id: string }>,
+  data: Array<{ label: string; value: number; isOther?: boolean; id?: string }>,
   respondentCount: number | undefined,
   palette: string[],
   barThickness: number,
@@ -213,12 +253,15 @@ function getStackedChartData(
   // labels: [질문 텍스트 1개]
   // datasets: 각 응답 옵션별로 하나씩, 값은 비율(%)
   const total = respondentCount || data.reduce((a, b) => a + b.value, 0);
+  const numDataPoints = data.filter(d => !d.isOther).length;
+  const distributedColors = generateColorSet(numDataPoints, palette);
+  let colorIndex = 0;
   return {
     labels: [''], // x축(세로) 또는 y축(가로)에 카테고리 1개만
-    datasets: data.map((d, i) => ({
+    datasets: data.map((d) => ({
       label: d.label,
       data: [total ? Math.round((d.value / total) * 1000) / 10 : 0],
-      backgroundColor: d.isOther ? OTHER_GRAY : palette[i % palette.length],
+      backgroundColor: d.isOther ? OTHER_GRAY : distributedColors[colorIndex++],
       borderRadius: 0,
       barPercentage,
       categoryPercentage,
@@ -239,9 +282,12 @@ function getDefaultBarThickness(chartType: ChartType, dataLen: number) {
   return 54;
 }
 
-// 고유 id 부여 함수
-function withRowId(arr: Array<{ label: string; value: number; isOther?: boolean; id?: string }>): Array<{ label: string; value: number; isOther?: boolean; id: string }> {
-  return arr.map((d, i) => ({ ...d, id: d.id ?? `row_${i}` }));
+// id가 없는 경우 자동으로 생성하는 함수
+function withRowId(arr: Response[]): Response[] {
+  return arr.map((item, index) => ({
+    ...item,
+    id: item.id || `row_${index}`
+  }));
 }
 
 // --- 주관식 데이터에서 단어 빈도 추출 함수 ---
@@ -297,8 +343,9 @@ const ChartCard: React.FC<ChartCardProps> = ({
   isReportMode = false,
   hideTitle = false,
   dataTable,
+  onTitleChange,
 }) => {
-  const [dataTableOpen, setDataTableOpen] = useState(false);
+  const [dataTableOpen, setDataTableOpen] = useState(isReportMode);
   const chartRef = useRef<any>(null);
   // --- y축 최대값 상태 (모든 Bar 계열) ---
   const getDefaultYMax = () => {
@@ -341,40 +388,42 @@ const ChartCard: React.FC<ChartCardProps> = ({
       };
     }
 
-    const sortedData = [
-      ...data.filter(d => !d.isOther),
-      ...data.filter(d => d.isOther)
-    ];
+    let sortedData: Response[];
 
-    // 데이터가 없는 경우 빈 배열 반환
-    if (sortedData.length === 0) {
-      return {
-        labels: [],
-        values: [],
-        backgroundColors: [],
-        sortedData: []
-      };
+    if (questionType === 'multiple_select') {
+      // 복수응답: '기타'를 제외하고 내림차순 정렬 후, '기타'를 맨 뒤에 붙임
+      const otherItems = data.filter(d => d.isOther);
+      const regularItems = data.filter(d => !d.isOther);
+      regularItems.sort((a, b) => b.value - a.value);
+      sortedData = [...regularItems, ...otherItems];
+    } else {
+      // 그 외의 경우 '기타' 항목을 맨 뒤로 정렬
+      sortedData = [
+        ...data.filter(d => !d.isOther),
+        ...data.filter(d => d.isOther)
+      ];
     }
+    
+    const finalSortedData = withRowId(sortedData);
 
-    // 반드시 sortedTableData 기준으로 labels, values, backgroundColors 생성
-    const labels = sortedData.map(d => d.label);
-    const values = sortedData.map(d => d.value);
+    const labels = finalSortedData.map(d => d.label);
+    const values = finalSortedData.map(d => d.value);
     let backgroundColors;
     if (colors && colors.length > 0) {
-      backgroundColors = colors.slice(0, sortedData.length);
+      backgroundColors = colors.slice(0, finalSortedData.length);
     } else if (chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') {
-      backgroundColors = sortedData.map((d, i) => d.isOther ? OTHER_GRAY : matrixColors[i % matrixColors.length]);
+      backgroundColors = finalSortedData.map((d, i) => d.isOther ? OTHER_GRAY : matrixColors[i % matrixColors.length]);
     } else if (questionType === 'likert' || questionType === 'matrix') {
-      backgroundColors = sortedData.map((d, i) => d.isOther ? OTHER_GRAY : likertColors[i % likertColors.length]);
+      backgroundColors = finalSortedData.map((d, i) => d.isOther ? OTHER_GRAY : likertColors[i % likertColors.length]);
     } else {
-      backgroundColors = sortedData.map((d, i) => d.isOther ? OTHER_GRAY : generateColorSet(sortedData.length, objectiveColors)[i]);
+      backgroundColors = finalSortedData.map((d, i) => d.isOther ? OTHER_GRAY : generateColorSet(finalSortedData.length, objectiveColors)[i]);
     }
 
     return {
       labels,
       values,
       backgroundColors,
-      sortedData
+      sortedData: finalSortedData
     };
   }, [data, colors, questionType, chartType]);
 
@@ -402,8 +451,8 @@ const ChartCard: React.FC<ChartCardProps> = ({
           display: true,
           color: '#000',
           font: { weight: 'bold' },
-          anchor: 'end',
-          align: 'top',
+          anchor: 'end' as const,
+          align: 'end' as const,
           formatter: (value: number) => value === undefined || value === null ? '' : formatNumber(value),
         }
       },
@@ -447,8 +496,12 @@ const ChartCard: React.FC<ChartCardProps> = ({
   }, [chartType, chartData.labels, chartData.values]);
 
   // --- 차트 데이터 useMemo 분리 ---
-  const [localTableData, setLocalTableData] = useState<Array<{ label: string; value: number; isOther?: boolean; id: string }>>(() => withRowId(data));
+  const [localTableData, setLocalTableData] = useState<Response[]>(() => withRowId(data));
   const [sortConfig, setSortConfig] = useState<{ key: 'label' | 'value' | 'percent'; direction: 'asc' | 'desc' } | null>(null);
+
+  useEffect(() => {
+    setLocalTableData(withRowId(data));
+  }, [data]);
 
   // 정렬 함수
   const handleSort = (key: 'label' | 'value' | 'percent') => {
@@ -475,7 +528,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
   // 행 이동 함수 (localTableData의 실제 순서 기준으로 이동, sortedTableData는 화면 표시용)
   const moveRow = (sortedIdx: number, direction: -1 | 1) => {
     const row = sortedTableData[sortedIdx];
-    const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
+    const realIdx = localTableData.findIndex((r) => r.id === row.id);
     const to = realIdx + direction;
     if (to < 0 || to >= localTableData.length) return;
     const arr = [...localTableData];
@@ -500,8 +553,8 @@ const ChartCard: React.FC<ChartCardProps> = ({
     return sorted;
   }, [localTableData, sortConfig]);
 
-  // label에 id를 붙여 Chart.js에 넘기기 (캐싱 문제 해결)
-  const chartLabels = sortedTableData.map(d => `${d.label}__${d.id}`);
+  // label에 id를 붙여 Chart.js에 넘기기 (차트 전용 데이터 사용)
+  const chartLabels = chartData.sortedData.map(d => `${d.label}__${d.id || ''}`);
 
   // 총합 계산
   const totalResponses = useMemo(() => localTableData.reduce((sum: number, item: { value: number }) => sum + item.value, 0), [localTableData]);
@@ -525,25 +578,39 @@ const ChartCard: React.FC<ChartCardProps> = ({
         yMax = customYMax;
       }
     }
+
+    // 데이터 레이블 설정: 차트 유형에 따라 분기
+    const datalabelsConfig = {
+      display: true,
+      font: { weight: 'bold' as const },
+      formatter: (value: number) => (value === undefined || value === null ? '' : `${formatNumber(value)}%`),
+      ...(chartType === 'pie' || chartType === 'donut'
+        ? {
+            // 원형/도넛은 중앙에 배치, 레이블은 검정색
+            anchor: 'center' as const,
+            align: 'center' as const,
+            offset: 0,
+            clamp: true,
+            color: '#000',
+          }
+        : {
+            // 막대그래프는 끝 바깥쪽에 표시
+            anchor: 'end' as const,
+            align: 'end' as const,
+            color: '#000',
+          }),
+    };
+
     return {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
         legend: {
-          display: chartType === 'pie' || chartType === 'donut',
-          position: 'bottom',
-          labels: { boxWidth: 12, padding: 15 }
+          display: false,
         },
         tooltip: { enabled: true, padding: 10, backgroundColor: 'rgba(0, 0, 0, 0.8)' },
         title: { display: false },
-        datalabels: {
-          display: true,
-          color: '#000',
-          font: { weight: 'bold' },
-          anchor: 'end',
-          align: 'top',
-          formatter: (value: number) => value === undefined || value === null ? '' : `${formatNumber(value)}%`,
-        }
+        datalabels: datalabelsConfig,
       },
       ...(isBarType ? {
         indexAxis: chartType === 'vertical' || chartType === 'verticalStacked' || chartType === 'verticalMatrix' ? 'x' : 'y',
@@ -583,12 +650,12 @@ const ChartCard: React.FC<ChartCardProps> = ({
     };
   }, [chartType, chartData.labels, chartData.values, questionType, customYMax, chartLabels]);
 
-  const matrixChartDataConfig = useMemo(() => getMatrixChartData(sortedTableData, respondentCount, matrixColors, barThickness), [sortedTableData, respondentCount, barThickness]);
+  const matrixChartDataConfig = useMemo(() => getMatrixChartData(chartData.sortedData, respondentCount, matrixColors, barThickness), [chartData.sortedData, respondentCount, barThickness]);
   const generalChartDataConfig = useMemo(() => {
-    // 기존 getGeneralChartData 내부에서 labels를 chartLabels로 대체
-    const base = getGeneralChartData(sortedTableData, questionType, respondentCount, palette, likertColors, generateColorSet, barThickness);
+    // 차트 전용 데이터(chartData.sortedData)를 사용하도록 수정
+    const base = getGeneralChartData(chartData.sortedData, questionType, respondentCount, palette, likertColors, generateColorSet, barThickness);
     return { ...base, labels: chartLabels };
-  }, [sortedTableData, questionType, respondentCount, barThickness, chartLabels]);
+  }, [chartData.sortedData, questionType, respondentCount, barThickness, chartLabels, palette, likertColors]);
   const stackedChartDataConfig = useMemo(() => {
     let colorSet = palette;
     if (questionType === 'likert' || questionType === 'matrix') {
@@ -599,15 +666,17 @@ const ChartCard: React.FC<ChartCardProps> = ({
       colorSet = multiSelectColors;
     }
     const barP = 0.45, catP = 0.51;
-    return getStackedChartData(sortedTableData, respondentCount, colorSet, barThickness, barP, catP);
-  }, [sortedTableData, respondentCount, questionType, barThickness]);
+    return getStackedChartData(chartData.sortedData, respondentCount, colorSet, barThickness, barP, catP);
+  }, [chartData.sortedData, respondentCount, questionType, barThickness]);
 
   // --- 옵션 useMemo 분리 ---
   const stackedChartOptions = useMemo(() => ({
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
-      legend: { display: true, position: 'bottom', labels: { boxWidth: 12, padding: 15 } },
+      legend: { 
+        display: false,
+      },
       tooltip: { enabled: true, padding: 10, backgroundColor: 'rgba(0, 0, 0, 0.8)' },
       title: { display: false },
       datalabels: {
@@ -639,7 +708,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
 
   // 차트 컴포넌트 렌더링
   // 차트 데이터가 바뀔 때마다 강제 리렌더링을 위해 key를 부여
-  const chartKey = sortedTableData.map(d => d.id).join('-');
+  const chartKey = sortedTableData.map(d => d.id || '').join('-');
   const [isChartLoading, setIsChartLoading] = React.useState(false);
   const [chartProgress, setChartProgress] = React.useState(0);
   const [chartMsg, setChartMsg] = React.useState('');
@@ -776,472 +845,358 @@ const ChartCard: React.FC<ChartCardProps> = ({
     onGridSizeChange(newSize);
   };
 
-  if (pdfExportMode && !isReportMode) {
-    return (
-      <div className="bg-white p-2">
-        {/* 헤더/제목 */}
-        {(() => {
-          let header = null;
-          if (typeof questionRowIndex === 'number' && questionRowIndex > 0 && headers && headers[Number(questionIndex)]) {
-            header = headers[Number(questionIndex)];
-          }
-          return header ? <div className="text-xs text-gray-500 mb-1">[{header}]</div> : null;
-        })()}
-        <h3 className="text-lg font-semibold break-words mb-2">{question}</h3>
-        {/* 평균 점수 표기 (리커트만, 게이지바 PDF에서도 항상) */}
-        {questionType === 'likert' && typeof avgScore === 'number' && (
-          <div className={`w-full ${chartMaxWidth} mx-auto`}>
-            <div className="mb-2 text-blue-700 font-bold text-base text-center">
-              평균 점수: {avgScore} / 5점
-            </div>
-            <div className="bg-blue-100 rounded h-3 mb-2">
-              <div
-                className="bg-blue-500 h-3 rounded"
-                style={{ width: `${(avgScore / 5) * 100}%`, transition: 'width 0.5s' }}
-              />
-            </div>
-          </div>
-        )}
-        {/* 차트 영역 */}
-        <div className="my-2 flex items-center justify-center">
-          <div style={{ minWidth: 320, maxWidth: 600, width: '100%', height: 320 }}>
-            {renderChart()}
-          </div>
-        </div>
-        {/* 데이터 테이블 */}
-        <div className="mt-2 border rounded bg-gray-50 p-2 text-xs">
-          <table className="w-full border text-xs">
-            <thead>
-              <tr className="bg-gray-100">
-                <th className="p-1 text-center">순서</th>
-                <th className="p-1 text-center">응답 항목</th>
-                <th className="p-1 text-center">응답갯수</th>
-                <th className="p-1 text-center">비율(%)</th>
-                <th className="p-1 text-center">기타응답</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedTableData.map((row, idx) => {
-                const percent = getPercent(row.value);
-                return (
-                  <tr key={row.id}>
-                    <td className="text-center">{idx + 1}</td>
-                    <td className="text-center">{row.label}</td>
-                    <td className="text-center">{row.value}</td>
-                    <td className="text-center">{percent}</td>
-                    <td className="text-center">{row.isOther ? 'O' : ''}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    );
-  }
+  const baseContainerClass = "flex flex-col h-full";
+  const pdfContainerClass = "bg-transparent p-0 border-none shadow-none";
+  const webContainerClass = "bg-white rounded-lg shadow-sm border border-gray-200 p-4 relative";
+
+  const containerClasses = `${baseContainerClass} ${pdfExportMode ? pdfContainerClass : webContainerClass}`;
+
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [editableTitle, setEditableTitle] = useState(question);
+  
+  // 질문행이 2 이상일 경우, 이전 행을 헤더로 사용
+  const headerToShow = headers && questionRowIndex && questionRowIndex > 1
+    ? headers[questionRowIndex - 2]
+    : null;
+
+  useEffect(() => {
+    setEditableTitle(question);
+  }, [question]);
+
+  const handleTitleUpdate = () => {
+    if (editableTitle.trim() === '') {
+      setEditableTitle(question); // 비어있으면 원상복구
+    } else {
+      onTitleChange(editableTitle);
+    }
+    setIsEditingTitle(false);
+  };
 
   // 모든 차트 타입에서 카드 레이아웃을 반환하도록 통일
   return (
-    <div className={`relative bg-white rounded-lg shadow-sm border border-gray-200 ${pdfExportMode ? 'p-0' : 'p-4'}`}
-      style={{
+    <div 
+      className={containerClasses}
+      style={!pdfExportMode ? {
         gridColumn: `span ${gridSize.w}`,
         gridRow: `span ${gridSize.h}`,
-      }}>
-      {!isReportMode && !pdfExportMode && (
-        <div className="absolute top-2 right-2 flex gap-1">
-          <button
-            onClick={() => onGridSizeChange({ w: Math.max(1, gridSize.w - 1), h: gridSize.h })}
-            className="p-1 text-gray-500 hover:text-gray-700"
-            title="너비 줄이기"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          <button
-            onClick={() => onGridSizeChange({ w: Math.min(gridColumns, gridSize.w + 1), h: gridSize.h })}
-            className="p-1 text-gray-500 hover:text-gray-700"
-            title="너비 늘리기"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-          </button>
-          <button
-            onClick={() => onGridSizeChange({ w: gridSize.w, h: Math.max(1, gridSize.h - 1) })}
-            className="p-1 text-gray-500 hover:text-gray-700"
-            title="높이 줄이기"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
-            </svg>
-          </button>
-          <button
-            onClick={() => onGridSizeChange({ w: gridSize.w, h: gridSize.h + 1 })}
-            className="p-1 text-gray-500 hover:text-gray-700"
-            title="높이 늘리기"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-        </div>
-      )}
-
-      {!hideTitle && (
-        <div className="flex justify-between items-start mb-4">
-          <div className="flex-1">
-            {headers && typeof questionRowIndex === 'number' && questionRowIndex > 0 && headers[Number(questionIndex)] && (
-              <div className="text-xs text-gray-500 mb-1">[{headers[Number(questionIndex)]}]</div>
-            )}
-            {!pdfExportMode && (
-              <div className="mb-2">
-                <input
-                  className="text-base font-bold w-full border-b border-gray-200 focus:border-blue-400 outline-none bg-transparent mb-1"
-                  value={question}
-                  onChange={e => {
-                    if (isReportMode) {
-                      // 보고서 모드에서는 제목 편집
-                      onQuestionTypeChange(e.target.value as any);
-                    } else {
-                      // 분석 모드에서는 문항 유형 변경
-                      onQuestionTypeChange(e.target.value as QuestionTypeValue);
+      } : {}}
+    >
+      {/* 캡처 단위를 위해 모든 요소를 포함하는 div */}
+      <div className="flex flex-col flex-1">
+        {headerToShow && (
+          <div className="text-sm font-semibold text-gray-600 mb-2 pb-2 border-b">
+            {headerToShow}
+          </div>
+        )}
+        {!hideTitle && (
+          <div className="flex justify-between items-start mb-1">
+            <div className="flex-1" onDoubleClick={() => !isReportMode && setIsEditingTitle(true)} title={isReportMode ? "" : "제목을 더블클릭하여 수정"}>
+              {isEditingTitle ? (
+                <textarea
+                  value={editableTitle}
+                  onChange={(e) => setEditableTitle(e.target.value)}
+                  onBlur={handleTitleUpdate}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleTitleUpdate();
+                    } else if (e.key === 'Escape') {
+                      setIsEditingTitle(false);
+                      setEditableTitle(question);
                     }
                   }}
-                  onBlur={e => {/* 필요시 저장 로직 */}}
+                  className="w-full border rounded p-1 text-base font-bold bg-blue-50 resize-none"
+                  autoFocus
+                  rows={2}
                 />
-              </div>
-            )}
-            {pdfExportMode && (
-              <div className="mb-2">
-                <div className="text-base font-bold">{question}</div>
-              </div>
-            )}
+              ) : (
+                <div className="text-base font-bold break-words cursor-pointer">{question}</div>
+              )}
+            </div>
           </div>
-          {/* 총 응답 갯수: 제목 아래, 오른쪽 정렬, 작은 크기 */}
+        )}
+        {/* 총 응답 갯수: 제목 바로 아래 */}
+        <div className="flex justify-end mb-2 -mt-1">
+          <span className="text-xs text-gray-500">총 응답: {formatNumber(respondentCount || Math.round(data.reduce((sum, item) => sum + item.value, 0)))}개</span>
         </div>
-      )}
-      <div className="flex justify-end mb-2 -mt-2">
-        <span className="text-xs text-gray-500">총 응답: {formatNumber(respondentCount || Math.round(data.reduce((sum, item) => sum + item.value, 0)))}개</span>
-      </div>
-      {/* 평균 점수 표기 (리커트만, 게이지바 PDF에서도 항상) */}
-      {questionType === 'likert' && typeof avgScore === 'number' && (
-        <div className={`w-full ${chartMaxWidth} mx-auto`}>
-          <div className="mb-2 text-blue-700 font-bold text-base text-center">
-            평균 점수: {avgScore} / 5점
-          </div>
-          <div className="bg-blue-100 rounded h-3 mb-2">
-            <div
-              className="bg-blue-500 h-3 rounded"
-              style={{ width: `${(avgScore / 5) * 100}%`, transition: 'width 0.5s' }}
-            />
-          </div>
-        </div>
-      )}
-      {/* 차트 영역 */}
-      <div className="mt-4 flex-1 flex items-center justify-center">
-        <div className="mx-auto" style={{ height: chartHeight, width: chartWidth, minWidth: 320, maxWidth: '100%' }}>
-          {renderChart()}
-        </div>
-      </div>
-      {/* --- 옵션/버튼 영역: 항상 카드 하단에 --- */}
-      {(!isReportMode && !pdfExportMode) && (
-        <>
-          {/* 1줄(상단): 드롭다운 메뉴 + 순서변경 */}
-          <div className="flex flex-row flex-wrap items-center gap-1 mt-auto mb-1">
-            <select
-              value={chartType}
-              onChange={e => onChartTypeChange(e.target.value as ChartType)}
-              className="border rounded px-1 py-0.5 text-[11px]"
-            >
-              <option value="vertical">세로 비율</option>
-              <option value="horizontal">가로 비율</option>
-              <option value="verticalStacked">세로 전체 누적</option>
-              <option value="horizontalStacked">가로 전체 누적</option>
-              <option value="pie">원형</option>
-              <option value="donut">도넛형</option>
-              <option value="verticalMatrix">세로 비율(행렬형)</option>
-              <option value="horizontalMatrix">가로 비율(행렬형)</option>
-              {/* 주관식일 때만 워드클라우드/TopN 옵션 노출 */}
-              {questionType === 'open' && <option value="wordcloud">워드 클라우드</option>}
-              {questionType === 'open' && <option value="topN">상위 키워드/문장</option>}
-            </select>
-            <select
-              value={questionType}
-              onChange={e => onQuestionTypeChange(e.target.value as QuestionTypeValue)}
-              className="border rounded px-1 py-0.5 text-[11px]"
-            >
-              <option value="likert">리커트 척도</option>
-              <option value="multiple">객관식</option>
-              <option value="multiple_select">복수응답</option>
-              <option value="open">주관식</option>
-              <option value="matrix">행렬형</option>
-            </select>
-            {(chartType === 'vertical' || chartType === 'horizontal' || chartType === 'verticalStacked' || chartType === 'horizontalStacked' || chartType === 'verticalMatrix' || chartType === 'horizontalMatrix') && (
-              <div className="flex items-center gap-1 text-[11px]">
-                <span>y축</span>
-                <select
-                  value={customYMax}
-                  onChange={e => setCustomYMax(e.target.value as 'auto' | 100 | 50)}
-                  className="border rounded px-1 py-0.5 text-[11px]"
-                >
-                  <option value="auto">자동</option>
-                  <option value={100}>100</option>
-                  <option value={50}>50</option>
-                </select>
-                <span>막대 두께</span>
-                <select
-                  value={barThickness}
-                  onChange={e => setBarThickness(Number(e.target.value))}
-                  className="border rounded px-1 py-0.5 text-[11px]"
-                >
-                  {barThicknessOptions.map(val => (
-                    <option
-                      key={val}
-                      value={val}
-                      style={val === defaultThickness ? { color: '#2563eb', fontWeight: 600 } : {}}
-                    >
-                      {val}px{val === defaultThickness ? ' (원본)' : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
-            {/* 순서 변경 버튼 */}
-            {onMoveUp && <button onClick={onMoveUp} className="text-xs px-1 text-blue-500 hover:text-blue-700" title="카드 위로 이동">▲</button>}
-            {onMoveDown && <button onClick={onMoveDown} className="text-xs px-1 text-blue-500 hover:text-blue-700" title="카드 아래로 이동">▼</button>}
-          </div>
-          {/* 2줄(하단): 크기조절/삭제/데이터테이블 */}
-          <div className="flex flex-row flex-wrap items-center gap-1 mb-1">
-            <button 
-              onClick={() => handleGridSizeChange('w', -1)} 
-              className="text-xs px-1"
-              disabled={gridSize.w <= 1}
-            >
-              ◀
-            </button>
-            <button 
-              onClick={() => handleGridSizeChange('w', 1)} 
-              className="text-xs px-1"
-              disabled={gridSize.w >= gridColumns}
-            >
-              ▶
-            </button>
-            <button 
-              onClick={() => handleGridSizeChange('h', -1)} 
-              className="text-xs px-1"
-              disabled={gridSize.h <= 1}
-            >
-              ▲
-            </button>
-            <button 
-              onClick={() => handleGridSizeChange('h', 1)} 
-              className="text-xs px-1"
-              disabled={gridSize.h >= 4}
-            >
-              ▼
-            </button>
-            {onDelete && <button onClick={onDelete} className="text-xs px-1 text-red-500">삭제</button>}
-            <button
-              onClick={() => setDataTableOpen(open => !open)}
-              className="text-xs bg-gray-100 text-gray-700 rounded px-2 py-0.5"
-            >
-              {dataTableOpen ? '데이터 테이블 닫기' : '데이터 테이블 열기'}
-            </button>
-          </div>
-        </>
-      )}
 
-      {/* 보고서 모드에서의 간소화된 옵션 */}
-      {isReportMode && !pdfExportMode && (
-        <div className="flex flex-row flex-wrap items-center gap-1 mt-auto mb-1">
-          <select
-            value={chartType}
-            onChange={e => onChartTypeChange(e.target.value as ChartType)}
-            className="border rounded px-1 py-0.5 text-[11px]"
-          >
-            <option value="vertical">세로 비율</option>
-            <option value="horizontal">가로 비율</option>
-            <option value="verticalStacked">세로 전체 누적</option>
-            <option value="horizontalStacked">가로 전체 누적</option>
-            <option value="pie">원형</option>
-            <option value="donut">도넛형</option>
-            <option value="verticalMatrix">세로 비율(행렬형)</option>
-            <option value="horizontalMatrix">가로 비율(행렬형)</option>
-            {questionType === 'open' && <option value="wordcloud">워드 클라우드</option>}
-            {questionType === 'open' && <option value="topN">상위 키워드/문장</option>}
-          </select>
-          <button 
-            onClick={() => handleGridSizeChange('w', -1)} 
-            className="text-xs px-1"
-            disabled={gridSize.w <= 1}
-            title="너비 줄이기"
-          >
-            ◀
-          </button>
-          <button 
-            onClick={() => handleGridSizeChange('w', 1)} 
-            className="text-xs px-1"
-            disabled={gridSize.w >= gridColumns}
-            title="너비 늘리기"
-          >
-            ▶
-          </button>
-          <button 
-            onClick={() => handleGridSizeChange('h', -1)} 
-            className="text-xs px-1"
-            disabled={gridSize.h <= 1}
-            title="높이 줄이기"
-          >
-            ▲
-          </button>
-          <button 
-            onClick={() => handleGridSizeChange('h', 1)} 
-            className="text-xs px-1"
-            disabled={gridSize.h >= 4}
-            title="높이 늘리기"
-          >
-            ▼
-          </button>
-          <button
-            onClick={() => setDataTableOpen(open => !open)}
-            className="text-xs bg-gray-100 text-gray-700 rounded px-2 py-0.5"
-          >
-            {dataTableOpen ? '데이터 테이블 닫기' : '데이터 테이블 열기'}
-          </button>
-        </div>
-      )}
+        {/* --- 리커트 평균점수 표시 (개선된 버전) --- */}
+        {questionType === 'likert' && avgScore !== undefined && avgScore !== null && (
+          <div className="mb-3 mt-4 px-2">
+            {/* 전체 막대의 컨테이너. 텍스트와 막대가 모두 이 안에 위치. */}
+            <div className="relative w-full bg-gray-200 rounded-lg h-6 overflow-hidden">
+              
+              {/* 1. 배경 (회색 막대 + 검은색 텍스트) */}
+              <div className="absolute inset-0 flex justify-center items-center">
+                <span 
+                  className={`text-sm font-bold ${
+                    avgScore <= 2.3 ? 'text-black' : 'text-gray-800'
+                  }`}
+                >
+                  평균 {avgScore.toFixed(2)}점
+                </span>
+              </div>
 
-      {/* 데이터 테이블 토글 */}
-      {(!pdfExportMode && dataTableOpen) && (
-        <div className="mt-2 border rounded bg-gray-50 p-2 text-xs">
-          <table className="w-full border text-xs">
-            <thead>
-              <tr className="bg-gray-100">
-                <th className="p-1 text-center">순서</th>
-                <th className="p-1 text-center">응답 항목
-                  {!isReportMode && <button onClick={() => handleSort('label')} className="ml-1 text-gray-500">▲▼</button>}
-                </th>
-                <th className="p-1 text-center">응답갯수
-                  {!isReportMode && <button onClick={() => handleSort('value')} className="ml-1 text-gray-500">▲▼</button>}
-                </th>
-                <th className="p-1 text-center">비율(%)
-                  {!isReportMode && <button onClick={() => handleSort('percent')} className="ml-1 text-gray-500">▲▼</button>}
-                </th>
-                <th className="p-1 text-center">기타응답</th>
-                {!isReportMode && <th className="p-1 text-center">이동</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {sortedTableData.map((row, idx) => {
-                const percent = getPercent(row.value);
+              {/* 2. 전경 (동적 색상 막대 + 흰색 텍스트) */}
+              {/* 점수에 따라 색상이 동적으로 변경됨: 리커트 척도 그래프와 동일한 색상 사용 */}
+              <div
+                className="absolute top-0 left-0 h-full rounded-lg overflow-hidden"
+                style={{ 
+                  width: `${(avgScore / 5) * 100}%`,
+                  backgroundColor: (() => {
+                    // 리커트 척도 그래프와 동일한 색상 사용
+                    if (avgScore <= 1.5) {
+                      return '#f43f5e'; // 1점대: 매우불만족 색상
+                    } else if (avgScore <= 2.5) {
+                      return '#fca5a5'; // 2점대: 불만족 색상
+                    } else if (avgScore <= 3.5) {
+                      return '#60a5fa'; // 3점대: 만족 색상 (4점에 사용되는 연한 파란색)
+                    } else {
+                      return '#2563eb'; // 4점대: 매우만족 색상 (5점에 사용되는 진한 파란색)
+                    }
+                  })()
+                }}
+              >
+                {/* 흰색 텍스트는 보이지 않는 컨테이너 너비를 기준으로 중앙 정렬되어, 검은 텍스트와 정확히 겹침 */}
+                <div className="absolute inset-0 flex justify-center items-center" style={{ width: `calc(100% * 5 / ${avgScore || 1})`}}>
+                    <span className="text-white text-sm font-bold whitespace-nowrap">
+                      평균 {avgScore.toFixed(2)}점
+                    </span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {/* 차트 영역 */}
+        <div className="mt-2 flex-1 flex items-center justify-center">
+          <div className="mx-auto" style={{ height: chartHeight, width: chartWidth, minWidth: 320, maxWidth: '100%' }}>
+            {renderChart()}
+          </div>
+        </div>
+
+        {/* --- 커스텀 범례 --- */}
+        {(chartType === 'pie' || chartType === 'donut' || chartType === 'verticalStacked' || chartType === 'horizontalStacked') && (
+          <div className="mt-4 p-2 border border-gray-200 rounded-md">
+            <div className="flex flex-wrap justify-center gap-x-4 gap-y-1">
+              {generalChartDataConfig.datasets[0].backgroundColor.map((color: string, index: number) => {
+                const label = chartLabels[index]?.split('__')[0];
+                if (!label) return null;
                 return (
-                  <tr key={row.id}>
-                    <td className="text-center">{idx + 1}</td>
-                    <td className="text-center">
-                      {!isReportMode ? (
-                        <input
-                          className="border rounded px-1 py-0.5 w-full"
-                          value={row.label}
-                          onChange={e => {
-                            const newData = [...localTableData];
-                            const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
-                            newData[realIdx] = { ...row, label: e.target.value };
-                            setLocalTableData(newData);
-                          }}
-                        />
-                      ) : (
-                        row.label
-                      )}
-                    </td>
-                    <td className="text-center">
-                      {!isReportMode ? (
-                        <input
-                          type="number"
-                          className="border rounded px-1 py-0.5 w-16 text-right"
-                          value={row.value}
-                          min={0}
-                          onChange={e => {
-                            const newVal = Number(e.target.value);
-                            const newData = [...localTableData];
-                            const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
-                            newData[realIdx] = { ...row, value: newVal };
-                            setLocalTableData(newData);
-                          }}
-                        />
-                      ) : (
-                        row.value
-                      )}
-                    </td>
-                    <td className="text-center">
-                      {!isReportMode ? (
-                        <input
-                          type="number"
-                          className="border rounded px-1 py-0.5 w-16 text-right"
-                          value={percent}
-                          min={0}
-                          max={100}
-                          step={0.1}
-                          onChange={e => {
-                            const newPercent = Number(e.target.value);
-                            const newVal = Math.round((newPercent / 100) * totalResponses);
-                            const newData = [...localTableData];
-                            const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
-                            newData[realIdx] = { ...row, value: newVal };
-                            setLocalTableData(newData);
-                          }}
-                        />
-                      ) : (
-                        percent
-                      )}
-                    </td>
-                    <td className="text-center">
-                      {!isReportMode ? (
-                        <input
-                          type="checkbox"
-                          checked={!!row.isOther}
-                          onChange={e => {
-                            const newData = [...localTableData];
-                            const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
-                            newData[realIdx] = { ...row, isOther: e.target.checked };
-                            setLocalTableData(newData);
-                          }}
-                        />
-                      ) : (
-                        row.isOther ? 'O' : ''
-                      )}
-                    </td>
-                    {!isReportMode && (
-                      <td className="text-center">
-                        <button onClick={() => moveRow(idx, -1)} disabled={idx === 0} className="text-xs px-1">▲</button>
-                        <button onClick={() => moveRow(idx, 1)} disabled={idx === sortedTableData.length - 1} className="text-xs px-1">▼</button>
-                      </td>
-                    )}
-                  </tr>
+                  <div key={`legend-${index}`} className="flex items-center">
+                    <span
+                      className="w-3 h-3 mr-1.5 inline-block rounded-sm"
+                      style={{ backgroundColor: color }}
+                    ></span>
+                    <span className="text-xs font-semibold text-gray-800">{label}</span>
+                  </div>
                 );
               })}
-            </tbody>
-          </table>
-          {/* 초기화 버튼 추가 */}
-          {!isReportMode && (
-            <div className="mt-2 flex justify-end">
-              <button
-                className="text-xs bg-gray-200 text-gray-700 rounded px-2 py-0.5 hover:bg-blue-100"
-                onClick={() => setLocalTableData(withRowId(data))}
+            </div>
+          </div>
+        )}
+
+        {/* 데이터 테이블 토글 */}
+        {dataTableOpen && (
+          <div className="mt-4 border-t pt-2 bg-transparent text-xs">
+            <table className="w-full border text-xs">
+              <thead>
+                <tr className="bg-gray-100">
+                  <th className="p-1 text-center">순서</th>
+                  <th className="p-1 text-center">응답 항목
+                    {!isReportMode && <button onClick={() => handleSort('label')} className="ml-1 text-gray-500">▲▼</button>}
+                  </th>
+                  <th className="p-1 text-center">응답갯수
+                    {!isReportMode && <button onClick={() => handleSort('value')} className="ml-1 text-gray-500">▲▼</button>}
+                  </th>
+                  <th className="p-1 text-center">비율(%)
+                    {!isReportMode && <button onClick={() => handleSort('percent')} className="ml-1 text-gray-500">▲▼</button>}
+                  </th>
+                  <th className="p-1 text-center">기타응답</th>
+                  {!isReportMode && <th className="p-1 text-center">이동</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {sortedTableData.map((row, idx) => {
+                  // 복수응답일 경우, 비율 계산을 위한 총합은 모든 응답의 합
+                  const totalForPercentage = questionType === 'multiple_select'
+                    ? sortedTableData.reduce((sum, item) => sum + item.value, 0)
+                    : totalResponses;
+                  
+                  const getCorrectPercent = (val: number) => {
+                    if (!totalForPercentage || totalForPercentage === 0) return 0;
+                    return Math.round((val / totalForPercentage) * 1000) / 10;
+                  };
+
+                  const percent = getCorrectPercent(row.value);
+
+                  return (
+                    <tr key={row.id}>
+                      <td className="text-center">{idx + 1}</td>
+                      <td className="text-center">
+                        {!isReportMode ? (
+                          <input
+                            className="border rounded px-1 py-0.5 w-full"
+                            value={row.label}
+                            onChange={e => {
+                              const newData = [...localTableData];
+                              const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
+                              newData[realIdx] = { ...row, label: e.target.value };
+                              setLocalTableData(newData);
+                            }}
+                          />
+                        ) : (
+                          row.label
+                        )}
+                      </td>
+                      <td className="text-center">
+                        {!isReportMode ? (
+                          <input
+                            type="number"
+                            className="border rounded px-1 py-0.5 w-16 text-right"
+                            value={questionType === 'multiple_select' ? row.count : row.value}
+                            min={0}
+                            onChange={e => {
+                              const newVal = Number(e.target.value);
+                              const newData = [...localTableData];
+                              const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
+                              const updatedRow = questionType === 'multiple_select'
+                                ? { ...row, count: newVal, value: (newVal / totalForPercentage) * 100 }
+                                : { ...row, value: newVal };
+                              newData[realIdx] = updatedRow;
+                              setLocalTableData(newData);
+                            }}
+                          />
+                        ) : (
+                          formatNumber(questionType === 'multiple_select' ? row.count : row.value)
+                        )}
+                      </td>
+                      <td className="text-center">
+                        {!isReportMode ? (
+                          <input
+                            type="number"
+                            className="border rounded px-1 py-0.5 w-16 text-right"
+                            value={percent}
+                            min={0}
+                            max={100}
+                            step={0.1}
+                            onChange={e => {
+                              const newPercent = Number(e.target.value);
+                              const newVal = Math.round((newPercent / 100) * totalForPercentage);
+                              const newData = [...localTableData];
+                              const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
+                              newData[realIdx] = { ...row, value: newVal };
+                              setLocalTableData(newData);
+                            }}
+                          />
+                        ) : (
+                          `${percent}%`
+                        )}
+                      </td>
+                      <td className="text-center">
+                        {!isReportMode ? (
+                          <input
+                            type="checkbox"
+                            checked={!!row.isOther}
+                            onChange={e => {
+                              const newData = [...localTableData];
+                              const realIdx = localTableData.findIndex((r: { id: string }) => r.id === row.id);
+                              newData[realIdx] = { ...row, isOther: e.target.checked };
+                              setLocalTableData(newData);
+                            }}
+                          />
+                        ) : (
+                          row.isOther ? 'O' : ''
+                        )}
+                      </td>
+                      {!isReportMode && (
+                        <td className="text-center">
+                          <button onClick={() => moveRow(idx, -1)} disabled={idx === 0} className="text-xs px-1">▲</button>
+                          <button onClick={() => moveRow(idx, 1)} disabled={idx === sortedTableData.length - 1} className="text-xs px-1">▼</button>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {/* 초기화 버튼 추가 */}
+            {!isReportMode && (
+              <div className="mt-2 flex justify-end">
+                <button
+                  className="text-xs bg-gray-200 text-gray-700 rounded px-2 py-0.5 hover:bg-blue-100"
+                  onClick={() => setLocalTableData(withRowId(data))}
+                >
+                  초기화
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* --- 옵션/버튼 영역: 분석 페이지(웹)에서만 보임 --- */}
+        {!isReportMode && !pdfExportMode && (
+          <div className="mt-auto pt-2">
+            {/* 1줄(상단): 드롭다운 메뉴 + 순서변경 */}
+            <div className="flex flex-row flex-wrap items-center gap-x-3 gap-y-1 mb-1">
+              <select
+                value={chartType}
+                onChange={e => onChartTypeChange(e.target.value as ChartType)}
+                className="border rounded px-1 py-0.5 text-[11px]"
               >
-                초기화
+                <option value="vertical">세로 비율</option>
+                <option value="horizontal">가로 비율</option>
+                <option value="verticalStacked">세로 전체 누적</option>
+                <option value="horizontalStacked">가로 전체 누적</option>
+                <option value="pie">원형</option>
+                <option value="donut">도넛형</option>
+                <option value="verticalMatrix">세로 비율(행렬형)</option>
+                <option value="horizontalMatrix">가로 비율(행렬형)</option>
+                {questionType === 'open' && <option value="wordcloud">워드 클라우드</option>}
+                {questionType === 'open' && <option value="topN">상위 키워드/문장</option>}
+              </select>
+              <select
+                value={questionType}
+                onChange={e => onQuestionTypeChange(e.target.value as QuestionTypeValue)}
+                className="border rounded px-1 py-0.5 text-[11px]"
+              >
+                <option value="likert">리커트 척도</option>
+                <option value="multiple">객관식</option>
+                <option value="multiple_select">복수응답</option>
+                <option value="open">주관식</option>
+                <option value="matrix">행렬형</option>
+              </select>
+              {/* ... (other options like y-axis, bar thickness) ... */}
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-gray-500 font-semibold">순서:</span>
+                {onMoveUp && <button onClick={onMoveUp} className="text-xs px-1 text-blue-500 hover:text-blue-700" title="위로 이동">▲</button>}
+                {onMoveDown && <button onClick={onMoveDown} className="text-xs px-1 text-blue-500 hover:text-blue-700" title="아래로 이동">▼</button>}
+              </div>
+            </div>
+            {/* 2줄(하단): 크기조절/삭제/데이터테이블 */}
+            <div className="flex flex-row flex-wrap items-center gap-x-3 gap-y-1">
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-gray-500 font-semibold">너비:</span>
+                <button onClick={() => handleGridSizeChange('w', -1)} disabled={gridSize.w <= 1} className="px-1.5 py-0.5 border rounded-sm text-xs">-</button>
+                <button onClick={() => handleGridSizeChange('w', 1)} disabled={gridSize.w >= gridColumns} className="px-1.5 py-0.5 border rounded-sm text-xs">+</button>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-gray-500 font-semibold">높이:</span>
+                <button onClick={() => handleGridSizeChange('h', -1)} disabled={gridSize.h <= 1} className="px-1.5 py-0.5 border rounded-sm text-xs">-</button>
+                <button onClick={() => handleGridSizeChange('h', 1)} disabled={gridSize.h >= 4} className="px-1.5 py-0.5 border rounded-sm text-xs">+</button>
+              </div>
+              {onDelete && <button onClick={onDelete} className="text-xs px-1 text-red-500">삭제</button>}
+              <button
+                onClick={() => setDataTableOpen(open => !open)}
+                className="text-xs bg-gray-100 text-gray-700 rounded px-2 py-0.5"
+              >
+                {dataTableOpen ? '테이블 닫기' : '테이블 열기'}
               </button>
             </div>
-          )}
-        </div>
-      )}
-      {/* 워드클라우드/TopN 차트 렌더링 시 프로그레스/에러 안내 */}
-      {isChartLoading && <ProgressOverlay isOpen={true} progress={chartProgress} message={chartMsg} />}
-      {chartError && (
-        <div className="w-full flex flex-col items-center justify-center py-12">
-          <div className="text-red-600 font-bold text-lg mb-2">{chartError}</div>
-        </div>
-      )}
+          </div>
+        )}
+      </div>
     </div>
   );
 };

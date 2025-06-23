@@ -278,49 +278,58 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
 
       // 일반 문항 처리 (type이 'matrix'가 아닌 경우, matrixGroupId가 남아있어도 여기로 분기)
       const questionType = (qt?.type || 'multiple') as QuestionTypeValue;
-      let chartData: Array<{ label: string; value: number; isOther?: boolean }> = [];
+      let chartData: Array<{ label: string; value: number; count: number; isOther?: boolean }> = [];
       let respondentCount = 0;
       let responseOrder: string[] | undefined = undefined;
       let scores: number[] | undefined = undefined;
       let avgScore: number | undefined = undefined;
 
       if (questionType === 'multiple_select') {
-        // 복수응답: 옵션별 value 합산, 기타응답 구분, 백분율 내림차순 정렬
-        const values = processedRows.map((row: any[]) => row[qIdx])
-          .filter((v: any) => typeof v === 'string' && v.trim() !== '') as string[];
+        // 복수응답: 옵션별 count 집계, 기타응답은 하나로 묶음
+        const allIndividualResponses = processedRows.flatMap((row: any[]) => {
+          const cellValue = row[qIdx];
+          if (typeof cellValue !== 'string' || cellValue.trim() === '') return [];
+          // '@@' 또는 ',' 를 구분자로 사용
+          return cellValue.split(/@@|,/).map(s => s.trim()).filter(Boolean);
+        });
         
-        // 응답 카운트
-        const counts: Record<string, number> = {};
-        values.forEach(v => {
-          if (v.includes('@@')) {
-            v.split('@@').forEach(opt => {
-              const trimmedOpt = opt.trim();
-              if (trimmedOpt === '기타' || trimmedOpt.includes('_Others') || trimmedOpt.startsWith('Others_')) {
-                counts['기타'] = (counts['기타'] || 0) + 1;
-              } else {
-                counts[trimmedOpt] = (counts[trimmedOpt] || 0) + 1;
-              }
-            });
+        const predefinedOptions = qt.options || [];
+        const responseCounts: Record<string, number> = {};
+        let otherCount = 0;
+
+        allIndividualResponses.forEach((response: string) => {
+          if (predefinedOptions.includes(response)) {
+            responseCounts[response] = (responseCounts[response] || 0) + 1;
           } else {
-            if (v === '기타' || v.includes('_Others') || v.startsWith('Others_')) {
-              counts['기타'] = (counts['기타'] || 0) + 1;
-            } else {
-              counts[v] = (counts[v] || 0) + 1;
-            }
+            otherCount++;
           }
         });
+        
+        const finalData: Array<{ label: string; value: number; count: number; isOther: boolean }> = [];
+        const totalIndividualResponses = allIndividualResponses.length;
 
-        // 백분율 계산 및 내림차순 정렬
-        const total = Object.values(counts).reduce((sum, val) => sum + val, 0);
-        chartData = Object.entries(counts)
-          .map(([label, value]) => ({
+        // 카운트가 있는 사전 정의 옵션 추가
+        Object.entries(responseCounts).forEach(([label, count]) => {
+          finalData.push({
             label,
-            value: Math.round((value / total) * 1000) / 10, // 백분율로 변환
-            isOther: label === '기타'
-          }))
-          .sort((a, b) => b.value - a.value); // 내림차순 정렬
+            value: totalIndividualResponses > 0 ? (count / totalIndividualResponses) * 100 : 0,
+            count: count,
+            isOther: false,
+          });
+        });
 
-        respondentCount = values.length;
+        // 기타 응답 추가
+        if (otherCount > 0) {
+          finalData.push({
+            label: '기타',
+            value: totalIndividualResponses > 0 ? (otherCount / totalIndividualResponses) * 100 : 0,
+            count: otherCount,
+            isOther: true,
+          });
+        }
+
+        chartData = finalData;
+        respondentCount = processedRows.length; // 응답자 수 기준
         responseOrder = qt.options;
       } else if (questionType === 'likert') {
         // 리커트: 옵션별 value 합산, scoreMap, 평균점수
@@ -345,6 +354,7 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
           return {
             label,
             value: counts[label] || 0,
+            count: counts[label] || 0,
             isOther: false
           };
         });
@@ -354,6 +364,7 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
           chartData.push({
             label: `기타(${v})`,
             value: counts[v],
+            count: counts[v],
             isOther: true
           });
         });
@@ -385,6 +396,7 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
         chartData = (qt.options || []).map((label: string) => ({
           label,
           value: counts[label] || 0,
+          count: counts[label] || 0,
           isOther: false
         }));
 
@@ -400,7 +412,8 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
         }
         chartData = values.map((v: string) => ({
           label: v,
-          value: 1
+          value: 1,
+          count: 1
         }));
         respondentCount = values.length;
       }
@@ -447,8 +460,15 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
   };
 
   // 문항 유형 변경
-  const handleQuestionTypeChange = (qIdx: any, newType: QuestionType) => {
-    setAnalysisState(prev => ({ ...prev, charts: prev.charts.map(c => c.questionIndex === qIdx ? { ...c, questionType: newType } : c) }));
+  const handleQuestionTypeChange = (qIdx: string, newType: QuestionTypeValue) => {
+    setAnalysisState(prev => ({
+      ...prev,
+      charts: prev.charts.map(c =>
+        c.questionIndex === qIdx
+          ? { ...c, questionType: { ...c.questionType, type: newType } }
+          : c
+      )
+    }));
   };
 
   // 데이터 테이블 편집
@@ -536,6 +556,23 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
   // 그리드 컬럼 수 변경 핸들러
   const handleGridColumnsChange = (columns: number) => {
     setGridColumns(columns);
+  };
+
+  const handleTitleChange = (qIdx: string, newTitle: string) => {
+    setAnalysisState(prev => ({
+      ...prev,
+      charts: prev.charts.map(chart => {
+        if (chart.questionIndex === qIdx) {
+          // 행렬형 질문과 일반 질문을 구분하여 제목 업데이트
+          if (chart.matrixTitle) {
+            return { ...chart, matrixTitle: newTitle };
+          } else {
+            return { ...chart, questionType: { ...chart.questionType, text: newTitle } };
+          }
+        }
+        return chart;
+      })
+    }));
   };
 
   return (
@@ -867,12 +904,12 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
                 gridTemplateColumns: `repeat(${gridColumns}, 1fr)`
               }}
             >
-              {analysisState.charts.map((c: any) => {
+              {analysisState.charts.map((c: any, idx: any) => {
                 const isSelected = analysisState.reportSelectedCharts.includes(c.questionIndex);
                 return (
                   <div
                     id={`pdf-export-${c.questionIndex}`}
-                    key={c.questionIndex}
+                    key={`${c.questionIndex}-${idx}`}
                     style={{
                       gridColumn: `span ${Math.min(c.gridSize.w, gridColumns)}`,
                       gridRow: `span ${c.gridSize.h}`
@@ -880,26 +917,30 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
                     className={`relative`}
                   >
                     <ChartCard
+                      key={`${c.questionIndex}-${idx}`}
                       questionIndex={String(c.questionIndex)}
-                      question={surveyData.questions[c.questionIndex]?.text || `문항 ${c.questionIndex + 1}`}
-                      questionType={c.questionType.type as QuestionTypeValue}
+                      question={c.matrixTitle || c.questionType.text}
+                      questionType={c.questionType.type}
                       chartType={c.chartType}
                       data={c.data}
-                      colors={c.colors}
-                      respondentCount={c.respondentCount}
-                      avgScore={c.avgScore}
-                      headers={surveyData.headers}
-                      questionRowIndex={surveyData.questionRowIndex}
-                      gridSize={c.gridSize}
                       gridColumns={gridColumns}
                       onChartTypeChange={(newType) => handleChartTypeChange(c.questionIndex, newType)}
-                      onQuestionTypeChange={(newType) => handleQuestionTypeChange(c.questionIndex, { ...c.questionType, type: newType as QuestionTypeValue })}
+                      onQuestionTypeChange={(newType) => handleQuestionTypeChange(c.questionIndex, newType)}
                       onDataTableEdit={(newData) => handleDataTableEdit(c.questionIndex, newData)}
+                      gridSize={c.gridSize}
                       onGridSizeChange={(newSize) => handleGridSizeChange(c.questionIndex, newSize)}
                       onDuplicate={() => handleDuplicateChart(c.questionIndex)}
                       onDelete={() => handleDeleteChart(c.questionIndex)}
-                      onMoveUp={() => moveChart(c.questionIndex, 'up')}
-                      onMoveDown={() => moveChart(c.questionIndex, 'down')}
+                      onMoveUp={idx > 0 ? () => moveChart(c.questionIndex, 'up') : undefined}
+                      onMoveDown={idx < analysisState.charts.length - 1 ? () => moveChart(c.questionIndex, 'down') : undefined}
+                      onTitleChange={(newTitle) => handleTitleChange(c.questionIndex, newTitle)}
+                      respondentCount={c.respondentCount}
+                      scoreMap={c.scoreMap}
+                      responseOrder={c.responseOrder}
+                      scores={c.scores}
+                      avgScore={c.avgScore}
+                      headers={surveyData.headers}
+                      questionRowIndex={Number(c.questionIndex)}
                     />
                   </div>
                 );

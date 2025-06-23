@@ -1,11 +1,11 @@
 import React, { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useReactToPrint } from 'react-to-print';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
 import ChartCard from '../components/ChartCard';
 import useSurveyStore from '../store/surveyStore';
 import { ChartType, QuestionTypeValue } from '../types';
+import ReactDOM from 'react-dom';
 
 interface ReportPageProps {
   reportState: any;
@@ -17,17 +17,10 @@ interface ReportPageProps {
 const ReportPage: React.FC<ReportPageProps> = ({ reportState, setReportState, analysisState, setAnalysisState }) => {
   const navigate = useNavigate();
   const { surveyData } = useSurveyStore();
-  const printRef = useRef<HTMLDivElement>(null);
-  const [gridColumns, setGridColumns] = useState(4); // 기본값 4열
-
-  // @ts-ignore
-  const handlePrint = useReactToPrint({
-    content: () => printRef.current,
-    documentTitle: '설문 보고서',
-    removeAfterPrint: true,
-    onBeforeGetContent: () => Promise.resolve(),
-    onAfterPrint: () => {}
-  });
+  const [reportCharts] = useSurveyStore(state => [state.reportCharts]);
+  const [gridColumns, setGridColumns] = useState(3);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const pdfPreviewRef = useRef<HTMLDivElement>(null);
 
   // 보고서 페이지용 핸들러 함수들
   const handleChartTypeChange = (questionIndex: string, newType: ChartType) => {
@@ -122,65 +115,123 @@ const ReportPage: React.FC<ReportPageProps> = ({ reportState, setReportState, an
     });
   };
 
-  // PDF 다운로드 함수: 각 카드별 실제 DOM을 캡처하여 3열 그리드로 PDF에 배치 (gridSize 반영)
+  // PDF 전용 뷰: 카드 프레임 없이 헤더/제목/그래프/데이터테이블만 렌더링
+  const PDFExportView: React.FC<{ items: any[], gridColumns: number }> = ({ items, gridColumns }) => (
+    <div 
+      ref={pdfPreviewRef}
+      style={{ 
+        width: '100%', 
+        background: '#fff', 
+        padding: '20px',
+        minHeight: '100vh'
+      }}
+    >
+      <div 
+        style={{
+          display: 'grid',
+          gridTemplateColumns: `repeat(${gridColumns}, 1fr)`,
+          gap: '16px',
+          width: '100%'
+        }}
+      >
+        {items.map((item, idx) => (
+          <div
+            key={`pdf-${item.questionIndex}`}
+            id={`pdf-export-${item.questionIndex}`}
+            style={{ 
+              background: 'transparent', 
+              boxShadow: 'none', 
+              border: 'none',
+              padding: '8px',
+              minHeight: 'fit-content'
+            }}
+          >
+            <ChartCard
+              questionIndex={String(item.questionIndex)}
+              question={item.question || `문항 ${item.questionIndex}`}
+              questionType={item.questionType?.type || item.questionType}
+              chartType={item.chartType}
+              data={item.data}
+              colors={item.colors}
+              respondentCount={item.respondentCount}
+              avgScore={item.avgScore}
+              headers={item.headers}
+              questionRowIndex={item.questionRowIndex}
+              gridSize={item.gridSize}
+              gridColumns={gridColumns}
+              pdfExportMode={true}
+              isReportMode={true}
+              hideTitle={false}
+              onChartTypeChange={() => {}}
+              onQuestionTypeChange={() => {}}
+              onDataTableEdit={() => {}}
+              onGridSizeChange={() => {}}
+              onDuplicate={() => {}}
+              onDelete={() => {}}
+              onMoveUp={() => {}}
+              onMoveDown={() => {}}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  const handlePreview = () => {
+    setIsPreviewOpen(true);
+  };
+
+  // PDF 다운로드 함수: 그리드 레이아웃 유지
   const handleDownloadPDF = async () => {
-    if (!reportState.reportItems || reportState.reportItems.length === 0) return;
+    const previewElement = pdfPreviewRef.current;
+    if (!previewElement) {
+      alert('미리보기 요소를 찾을 수 없습니다.');
+      return;
+    }
+
     const pdf = new jsPDF('p', 'mm', 'a4');
     const pageWidth = pdf.internal.pageSize.getWidth();
     const pageHeight = pdf.internal.pageSize.getHeight();
-    const margin = 15;
+    const margin = 10;
     const contentWidth = pageWidth - margin * 2;
     const colCount = gridColumns;
-    const gap = 8; // 카드 간격(mm)
+    const gap = 8;
     const cardWidth = (contentWidth - gap * (colCount - 1)) / colCount;
-    let grid = [] as number[][]; // [row][col] = 1(점유)
     let y = margin;
-    let row = 0;
-    let maxRowHeight = 0;
-    for (let i = 0; i < reportState.reportItems.length; i++) {
-      const item = reportState.reportItems[i];
-      const chartId = `pdf-export-${item.questionIndex}`;
-      const exportElem = document.getElementById(chartId);
-      if (!exportElem) continue;
-      const gridW = item.gridSize?.w || 1;
-      const gridH = item.gridSize?.h || 1;
-      const imgW = cardWidth * gridW + gap * (gridW - 1);
-      const canvas = await html2canvas(exportElem, { scale: 2, backgroundColor: '#fff', useCORS: true });
-      const imgData = canvas.toDataURL('image/png');
-      const imgProps = pdf.getImageProperties(imgData);
-      const baseImgH = (imgProps.height * imgW) / imgProps.width;
-      const imgH = baseImgH * gridH;
-      let col = 0;
-      let found = false;
-      while (!found) {
-        if (!grid[row]) grid[row] = Array(colCount).fill(0);
-        if (col + gridW <= colCount && grid[row].slice(col, col + gridW).every(v => v === 0)) {
-          found = true;
-          for (let k = 0; k < gridW; k++) grid[row][col + k] = 1;
-        } else {
-          col++;
-          if (col > colCount - 1) {
-            row++;
-            y += maxRowHeight + gap;
-            col = 0;
-            maxRowHeight = 0;
-          }
+    let col = 0;
+    
+    const chartElements = Array.from(previewElement.querySelectorAll('[id^="pdf-export-"]')) as HTMLElement[];
+
+    for (let i = 0; i < chartElements.length; i++) {
+      const el = chartElements[i];
+      try {
+        const canvas = await html2canvas(el, { scale: 1.5, backgroundColor: '#fff', useCORS: true });
+        const imgData = canvas.toDataURL('image/jpeg', 0.9);
+        const imgProps = pdf.getImageProperties(imgData);
+        
+        const imgHeight = (imgProps.height * cardWidth) / imgProps.width;
+
+        if (y + imgHeight > pageHeight - margin) {
+          pdf.addPage();
+          y = margin;
+          col = 0;
         }
+
+        const x = margin + col * (cardWidth + gap);
+        pdf.addImage(imgData, 'JPEG', x, y, cardWidth, imgHeight, undefined, 'FAST');
+
+        col++;
+        if (col >= colCount) {
+          col = 0;
+          // 이 부분은 최대 높이 기준으로 y를 증가시켜야 하지만, 일단은 개별 높이로 처리
+          y += imgHeight + gap; 
+        }
+
+      } catch (error) {
+        console.error('Error capturing element for PDF:', el, error);
       }
-      if (y + imgH > pageHeight - margin) {
-        pdf.addPage();
-        y = margin;
-        row = 0;
-        col = 0;
-        grid = [];
-        maxRowHeight = 0;
-        if (!grid[row]) grid[row] = Array(colCount).fill(0);
-        for (let k = 0; k < gridW; k++) grid[row][col + k] = 1;
-      }
-      const x = margin + col * (cardWidth + gap);
-      pdf.addImage(imgData, 'PNG', x, y, imgW, imgH);
-      if (imgH > maxRowHeight) maxRowHeight = imgH;
     }
+
     pdf.save('설문_보고서.pdf');
   };
 
@@ -220,6 +271,13 @@ const ReportPage: React.FC<ReportPageProps> = ({ reportState, setReportState, an
               PDF로 다운로드
             </button>
             <button
+              onClick={handlePreview}
+              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+              disabled={reportState.reportItems.length === 0}
+            >
+              PDF 미리보기
+            </button>
+            <button
               onClick={() => setReportState((prev: any) => ({ ...prev, reportItems: [] }))}
               className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-400 focus:ring-offset-2"
               disabled={reportState.reportItems.length === 0}
@@ -228,7 +286,7 @@ const ReportPage: React.FC<ReportPageProps> = ({ reportState, setReportState, an
             </button>
           </div>
         </div>
-        <div ref={printRef} className="bg-white rounded-lg shadow p-2">
+        <div className="bg-white rounded-lg shadow p-2">
           {reportState.reportItems.length === 0 ? (
             <p className="text-gray-600">보고서에 추가된 그래프가 없습니다.</p>
           ) : (
@@ -311,6 +369,39 @@ const ReportPage: React.FC<ReportPageProps> = ({ reportState, setReportState, an
           </button>
         </div>
       </div>
+      {/* PDF 미리보기 모달 */}
+      {isPreviewOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-[95vw] h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-bold">PDF 미리보기 ({gridColumns}열)</h2>
+              <button
+                onClick={() => setIsPreviewOpen(false)}
+                className="text-gray-500 hover:text-gray-700 text-2xl"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto border rounded bg-gray-50">
+              <PDFExportView items={reportState.reportItems} gridColumns={gridColumns} />
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                onClick={() => setIsPreviewOpen(false)}
+                className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
+              >
+                닫기
+              </button>
+              <button
+                onClick={handleDownloadPDF}
+                className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+              >
+                PDF 다운로드
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

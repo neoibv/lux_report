@@ -14,7 +14,13 @@ export default defineConfig({
     open: true,
     watch: {
       usePolling: true,
-      interval: 100
+      interval: 1000,
+      followSymlinks: false
+    },
+    hmr: {
+      overlay: true,
+      port: 24678,
+      host: 'localhost'
     },
     // 필요시 proxy 설정 추가 가능
     // proxy: {
@@ -23,5 +29,16 @@ export default defineConfig({
   },
   optimizeDeps: {
     include: ['chart.js', 'chartjs-plugin-datalabels', 'react-chartjs-2']
+  },
+  build: {
+    sourcemap: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom'],
+          charts: ['chart.js', 'react-chartjs-2']
+        }
+      }
+    }
   }
 }); 
