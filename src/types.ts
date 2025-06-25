@@ -24,12 +24,15 @@ export interface Question {
   options?: string[];
   scoreMap?: Record<string, number>;
   scores?: number[];
+  displayTexts?: string[];
 }
 
 export interface Response {
   label: string;
   value: number;
   isOther?: boolean;
+  id?: string;
+  count?: number;
 }
 
 export interface SurveyData {

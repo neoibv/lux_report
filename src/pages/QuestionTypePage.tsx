@@ -77,125 +77,246 @@ const QuestionTypePage: React.FC = () => {
   }, [surveyData, navigate]);
 
   // 리커트 scoreMap 자동 생성 함수
-  function getLikertScoreMap(options: string[] | undefined): Record<string, number> | undefined {
-    if (!options || options.length !== 5) return undefined;
-    return options.reduce((acc, opt, idx) => {
-      acc[opt.trim().toLowerCase()] = 5 - idx;
-      return acc;
-    }, {} as Record<string, number>);
+  function getLikertScoreMap(options: any[] | undefined): Record<string, number> | undefined {
+    if (!options || options.length === 0) return undefined;
+    // 모든 옵션을 string으로 변환 후 trim
+    const normalizedOptions = options.map(opt => String(opt).trim());
+    // 1~5가 모두 포함되어 있으면 순서와 상관없이 리커트로 간주
+    const allNumbers = ['1', '2', '3', '4', '5'];
+    const hasAllNumbers = allNumbers.every(num => normalizedOptions.includes(num));
+    if (hasAllNumbers) {
+      const scoreMap: Record<string, number> = {};
+      allNumbers.forEach(num => { scoreMap[num] = parseInt(num); });
+      return scoreMap;
+    }
+    return undefined;
   }
 
   // 리커트 응답값 매핑 함수
   function mapToLikertScale(response: string, scoreMap: Record<string, number>): string {
-    const normalizedResponse = response.trim().toLowerCase();
-    const score = scoreMap[normalizedResponse];
-    
-    // 기존 응답값이 scoreMap에 없는 경우, 가장 가까운 값으로 매핑
-    if (score === undefined) {
-      const likertScales = ['매우 그렇다', '그렇다', '보통이다', '아니다', '전혀 아니다'];
-      // 응답값과 각 리커트 스케일 간의 유사도 계산
-      const similarities = likertScales.map(scale => ({
-        scale,
-        similarity: calculateSimilarity(normalizedResponse, scale)
-      }));
-      // 가장 유사한 스케일 선택
-      const mostSimilar = similarities.reduce((a, b) => 
-        a.similarity > b.similarity ? a : b
-      );
-      return mostSimilar.scale;
-    }
-    
-    // scoreMap에 있는 경우 해당하는 리커트 스케일 반환
-    const likertScales = ['매우 그렇다', '그렇다', '보통이다', '아니다', '전혀 아니다'];
-    return likertScales[5 - score - 1];
+    if (response == null) return '';
+    const trimmed = String(response).trim();
+    // 숫자형 응답값도 문자열로 변환하여 비교
+    const foundKey = Object.keys(scoreMap).find(
+      key => key === trimmed || key === String(Number(trimmed))
+    );
+    if (foundKey) return foundKey;
+    return '';
   }
 
-  // 문자열 유사도 계산 함수 (Levenshtein 거리 기반)
-  function calculateSimilarity(str1: string, str2: string): number {
-    const track = Array(str2.length + 1).fill(null).map(() =>
-      Array(str1.length + 1).fill(null));
+  // 숫자형 리커트 scoreMap 생성 함수 (1~5 숫자 응답용)
+  function getNumericLikertScoreMap(options: string[] | undefined): Record<string, number> | undefined {
+    if (!options || options.length === 0) return undefined;
+    const numericValues = options.map(v => String(v).trim());
+    // 1~5가 모두 포함되어 있으면 순서와 상관없이 리커트로 간주
+    const allNumbers = ['1', '2', '3', '4', '5'];
+    const hasAllNumbers = allNumbers.every(num => numericValues.includes(num));
+    if (hasAllNumbers) {
+      const scoreMap: Record<string, number> = {};
+      allNumbers.forEach(num => { scoreMap[num] = parseInt(num); });
+      return scoreMap;
+    }
+    return undefined;
+  }
+
+  // 숫자 응답값을 가진 문항의 실제 응답값들을 분석하여 리커트 매핑 생성
+  function createNumericLikertMapping(questionId: string): { scoreMap: Record<string, number>, options: string[], displayTexts: string[] } | null {
+    if (!surveyData) return null;
     
-    for (let i = 0; i <= str1.length; i += 1) {
-      track[0][i] = i;
-    }
-    for (let j = 0; j <= str2.length; j += 1) {
-      track[j][0] = j;
-    }
-
-    for (let j = 1; j <= str2.length; j += 1) {
-      for (let i = 1; i <= str1.length; i += 1) {
-        const indicator = str1[i - 1] === str2[j - 1] ? 0 : 1;
-        track[j][i] = Math.min(
-          track[j][i - 1] + 1,
-          track[j - 1][i] + 1,
-          track[j - 1][i - 1] + indicator
-        );
+    const columnIndex = parseInt(questionId.substring(1));
+    const questionType = surveyData.questionTypes.find(qt => qt.columnIndex === columnIndex);
+    
+    if (!questionType || !Array.isArray(questionType.responses)) return null;
+    
+    // 실제 응답값들 추출 (빈 값 제외)
+    const actualResponses: string[] = [];
+    questionType.responses.forEach((response: any) => {
+      if (response !== undefined && response !== null && response !== '' && String(response).trim() !== '') {
+        actualResponses.push(String(response));
       }
-    }
+    });
+    
+    if (actualResponses.length === 0) return null;
+    
+    // 숫자 응답값들만 필터링
+    const numericResponses: string[] = [];
+    actualResponses.forEach(v => {
+      if (/^[1-5]$/.test(v.trim())) {
+        numericResponses.push(v);
+      }
+    });
+    
+    if (numericResponses.length === 0) return null;
+    
+    // 고유한 숫자 응답값들 추출
+    const uniqueNumericResponses = Array.from(new Set(numericResponses));
+    uniqueNumericResponses.sort((a, b) => parseInt(a) - parseInt(b));
+    
+    // 1~5 중 누락된 숫자들 찾기
+    const allNumbers = ['1', '2', '3', '4', '5'];
+    const missingNumbers: string[] = [];
+    allNumbers.forEach(num => {
+      if (!uniqueNumericResponses.includes(num)) {
+        missingNumbers.push(num);
+      }
+    });
+    
+    // 완전한 1~5 옵션 생성 (누락된 숫자도 포함)
+    const completeOptions = [...uniqueNumericResponses, ...missingNumbers];
+    completeOptions.sort((a, b) => parseInt(a) - parseInt(b));
+    
+    // scoreMap 생성 (1=1, 2=2, ..., 5=5)
+    const scoreMap: Record<string, number> = {};
+    completeOptions.forEach(num => {
+      scoreMap[num] = parseInt(num);
+    });
+    
+    // displayTexts 생성 (숫자에 대응하는 텍스트)
+    const displayTexts: string[] = [];
+    completeOptions.forEach(num => {
+      const defaultTexts: Record<string, string> = {
+        '1': '1 (매우 나쁘다)',
+        '2': '2 (나쁘다)',
+        '3': '3 (보통이다)',
+        '4': '4 (좋다)',
+        '5': '5 (매우 좋다)'
+      };
+      displayTexts.push(defaultTexts[num] || num);
+    });
+    
+    return {
+      scoreMap,
+      options: completeOptions,
+      displayTexts
+    };
+  }
 
-    const maxLength = Math.max(str1.length, str2.length);
-    return 1 - (track[str2.length][str1.length] / maxLength);
+  // 응답이 있는 문항인지 확인하는 함수
+  function hasResponses(question: Question): boolean {
+    if (!surveyData) return false;
+    
+    const columnIndex = parseInt(question.id.substring(1));
+    const questionType = surveyData.questionTypes.find(qt => qt.columnIndex === columnIndex);
+    
+    if (!questionType || !Array.isArray(questionType.responses)) return false;
+    
+    // 응답이 하나라도 있는지 확인 (빈 문자열, null, undefined 제외)
+    return questionType.responses.some((response: any) => 
+      response !== undefined && response !== null && response !== ''
+    );
   }
 
   const handleQuestionTypeChange = (questionId: string, newType: QuestionTypeValue) => {
     if (!surveyData) return;
 
+    let updatedQuestionTypes = surveyData.questionTypes;
+    let updatedRows = surveyData.rows;
+
     const updatedQuestions = surveyData.questions.map(q => {
       if (q.id !== questionId) return q;
-      
-      // 리커트로 변경 시 scoreMap 자동 생성 및 응답값 매핑
-      if (newType === 'likert') {
-        const scoreMap = getLikertScoreMap(q.options);
-        if (scoreMap) {
-          // 해당 문항의 응답 데이터 찾기
-          const questionType = surveyData.questionTypes.find(
-            qt => qt.columnIndex === parseInt(q.id.substring(1))
-          );
-          
-          if (questionType && Array.isArray(questionType.responses)) {
-            // 응답값들을 리커트 스케일에 맞춰 매핑
-            const mappedResponses = questionType.responses.map((response: string) =>
-              mapToLikertScale(response, scoreMap)
-            );
-            
-            // questionTypes 업데이트
-            const updatedQuestionTypes = surveyData.questionTypes.map(qt => {
-              if (qt.columnIndex === parseInt(q.id.substring(1))) {
-          return {
-            ...qt,
-                  responses: mappedResponses
-          };
-        }
-        return qt;
-      });
 
-            setSurveyData({
-              ...surveyData,
-              questions: updatedQuestions,
-              headers: surveyData ? surveyData.headers ?? [] : [],
-              rows: surveyData ? surveyData.rows ?? [] : [],
-              questionTypes: updatedQuestionTypes,
-              questionRowIndex: surveyData ? surveyData.questionRowIndex ?? 0 : 0,
-              title: surveyData ? surveyData.title ?? '' : '',
-              description: surveyData ? surveyData.description ?? '' : '',
-              totalResponses: surveyData ? surveyData.totalResponses ?? 0 : 0,
-            });
+      if (newType === 'likert') {
+        // scoreMap, options, displayTexts 생성
+        let scoreMap = getLikertScoreMap(q.options);
+        let options = q.options || [];
+        let displayTexts: string[] = [];
+
+        if (!scoreMap) {
+          // 실제 응답값에서 추출
+          const questionType = surveyData.questionTypes.find(
+            qt => qt.columnIndex === parseInt(q.id.replace(/\D/g, ''))
+          );
+          if (questionType && Array.isArray(questionType.responses)) {
+            const actualResponses = Array.from(new Set(
+              (questionType.responses as any[])
+                .filter((r: any) => r !== undefined && r !== null && r !== '')
+                .map((r: any) => String(r))
+            )) as string[];
+            scoreMap = getNumericLikertScoreMap(actualResponses);
+            if (scoreMap) {
+              const numericMapping = createNumericLikertMapping(q.id);
+              if (numericMapping) {
+                scoreMap = numericMapping.scoreMap;
+                options = numericMapping.options;
+                displayTexts = numericMapping.displayTexts;
+              }
+            }
           }
         }
-        return { ...q, type: newType, scoreMap };
+
+        // scoreMap이 없으면 fallback (기본 1~5)
+        if (!scoreMap) {
+          scoreMap = { '1': 1, '2': 2, '3': 3, '4': 4, '5': 5 };
+          options = ['1', '2', '3', '4', '5'];
+          displayTexts = [
+            '1 (매우 나쁘다)', '2 (나쁘다)', '3 (보통이다)', '4 (좋다)', '5 (매우 좋다)'
+          ];
+        }
+
+        // === [동기화 보강] ===
+        // options, displayTexts, scoreMap을 점수 내림차순(5~1)으로 정렬
+        const optionScorePairs = options.map(opt => ({
+          opt,
+          score: scoreMap![opt]
+        }));
+        optionScorePairs.sort((a, b) => (b.score || 0) - (a.score || 0));
+        options = optionScorePairs.map(pair => pair.opt);
+        displayTexts = options.map((opt, idx) => displayTexts[idx] || '');
+        // scoreMap도 정렬된 options 기준으로 재생성
+        const newScoreMap: Record<string, number> = {};
+        options.forEach(opt => { newScoreMap[opt] = scoreMap![opt]; });
+        scoreMap = newScoreMap;
+
+        // responses를 scoreMap의 key로 변환(정규화)
+        const questionType = surveyData.questionTypes.find(
+          qt => qt.columnIndex === parseInt(q.id.replace(/\D/g, ''))
+        );
+        if (questionType && Array.isArray(questionType.responses)) {
+          const mappedResponses = questionType.responses.map((response: string) => {
+            const trimmed = String(response).trim();
+            const foundKey = Object.keys(scoreMap!).find(
+              key => key === trimmed || key === String(Number(trimmed))
+            );
+            return foundKey || trimmed;
+          });
+          updatedQuestionTypes = surveyData.questionTypes.map(qt =>
+            qt.columnIndex === parseInt(q.id.replace(/\D/g, ''))
+              ? { ...qt, responses: mappedResponses, options, displayTexts, scoreMap, responseOrder: options }
+              : qt
+          );
+        }
+
+        // rows의 해당 컬럼 값도 scoreMap의 key로 변환(정규화)
+        const colIdx = parseInt(q.id.replace(/\D/g, ''));
+        updatedRows = surveyData.rows.map(row => {
+          const original = row[colIdx];
+          if (original === undefined || original === null || original === '') return row;
+          const trimmed = String(original).trim();
+          const foundKey = Object.keys(scoreMap!).find(
+            key => key === trimmed || key === String(Number(trimmed))
+          );
+          const newRow = [...row];
+          newRow[colIdx] = foundKey || trimmed;
+          return newRow;
+        });
+
+        return { ...q, type: newType, scoreMap, options, displayTexts };
       }
-      
-      // scoreMap이 있으면 제거(리커트에서 다른 유형으로 변경)
-      if ('scoreMap' in q && q.scoreMap) {
-        const { scoreMap, ...rest } = q;
-        return { ...rest, type: newType };
-      }
+
       return { ...q, type: newType };
     });
 
-    setSurveyData({
+    // questionTypes도 type 동기화
+    const columnIndex = parseInt(questionId.replace(/\D/g, ''));
+    updatedQuestionTypes = updatedQuestionTypes.map(qt =>
+      qt.columnIndex === columnIndex ? { ...qt, type: newType } : qt
+    );
+
+    const newSurveyData = {
       ...surveyData,
       questions: updatedQuestions,
+      questionTypes: updatedQuestionTypes,
+      rows: updatedRows,
       matrixGroups: (surveyData.matrixGroups || []).map(group => ({
         ...group,
         questions: group.questions.map(gq =>
@@ -203,13 +324,12 @@ const QuestionTypePage: React.FC = () => {
         )
       })),
       headers: surveyData ? surveyData.headers ?? [] : [],
-      rows: surveyData ? surveyData.rows ?? [] : [],
-      questionTypes: surveyData ? surveyData.questionTypes ?? [] : [],
       questionRowIndex: surveyData ? surveyData.questionRowIndex ?? 0 : 0,
       title: surveyData ? surveyData.title ?? '' : '',
       description: surveyData ? surveyData.description ?? '' : '',
       totalResponses: surveyData ? surveyData.totalResponses ?? 0 : 0,
-    });
+    };
+    setSurveyData(newSurveyData);
   };
 
   // 행렬형 세트 내 소문항 유형 변경 시 분리 로직 추가
@@ -246,8 +366,8 @@ const QuestionTypePage: React.FC = () => {
             // questionTypes 업데이트
             const updatedQuestionTypes = surveyData.questionTypes.map(qt => {
               if (qt.columnIndex === parseInt(q.id.substring(1))) {
-          return {
-            ...qt,
+                return {
+                  ...qt,
                   responses: mappedResponses
                 };
               }
@@ -404,18 +524,20 @@ const QuestionTypePage: React.FC = () => {
   // LikertScoreMappingInfo 개선: options 전체 기준으로 매핑 표시
   const LikertScoreMappingInfo = ({ question, extraResponses }: { question: Question, extraResponses?: string[] }) => {
     if (!question.options || question.type !== 'likert') return null;
-    const scoreMap = question.scoreMap || getLikertScoreMap(question.options);
-    const fallbackMap = getLikertScoreMap(question.options);
+    // options를 항상 string으로 변환 후 trim
+    const normalizedOptions = (question.options ?? []).map(opt => String(opt).trim());
+    const scoreMap = question.scoreMap || getLikertScoreMap(normalizedOptions);
+    const fallbackMap = getLikertScoreMap(normalizedOptions);
     if (!scoreMap && !fallbackMap) return null;
     // 기타 응답 추출: options에 없는 실제 응답값
     const etcResponses = (extraResponses || []).filter(
-      resp => !(question.options ?? []).some(opt => opt.trim().toLowerCase() === resp.trim().toLowerCase())
+      resp => !(normalizedOptions).some(opt => opt.trim().toLowerCase() === resp.trim().toLowerCase())
     );
     // options 전체 기준으로 매핑 표시
-    const entries = (question.options ?? []).map(opt => {
-      const normOpt = opt.trim().toLowerCase();
-      const score = scoreMap?.[normOpt];
-      return { label: opt, norm: normOpt, score };
+    const entries = normalizedOptions.map(opt => {
+      const norm = opt.trim().toLowerCase();
+      const score = scoreMap?.[norm];
+      return { label: opt, norm: norm, score };
     });
     return (
       <div className="mt-2 p-2 bg-gray-50 rounded text-sm">
@@ -457,23 +579,29 @@ const QuestionTypePage: React.FC = () => {
 
   // LikertScoreMappingEditor 개선: options 전체 기준으로 매핑 에디터 표시/저장
   const LikertScoreMappingEditor = ({ question }: { question: Question }) => {
-    const { surveyData, setSurveyData } = useSurveyStore();
+    if (!question.options || question.type !== 'likert') return null;
+    const normalizedOptions = (question.options ?? []).map(opt => String(opt).trim());
     const [localScoreMap, setLocalScoreMap] = useState<Record<string, { score: number, isOther: boolean }>>({});
+    const [localDisplayTexts, setLocalDisplayTexts] = useState<Record<string, string>>({});
     const [showEditor, setShowEditor] = useState(false);
-    const options = question.options ?? [];
-    // 기타응답 추출용 uniqueResponses
-    const questionType = surveyData?.questionTypes.find(
-      qt => qt.columnIndex === parseInt(question.id.substring(1))
-    );
-    let uniqueResponses: string[] = Array.from(
-      new Set((questionType?.responses || []).map((r: string) => r.trim()))
-    );
+    
+    // 디폴트 리커트 텍스트 - 점수 순서(5점→1점)에 맞게
+    const getDefaultLikertTexts = (options: string[]) => {
+      if (options.length === 5) {
+        return ['매우 그렇다', '그렇다', '보통', '그렇지 않다', '전혀 그렇지 않다'];
+      } else if (options.length === 4) {
+        return ['매우 그렇다', '그렇다', '그렇지 않다', '전혀 그렇지 않다'];
+      } else if (options.length === 3) {
+        return ['그렇다', '보통', '그렇지 않다'];
+      }
+      return options.map(() => '');
+    };
+    
     useEffect(() => {
       const initialMap: Record<string, { score: number, isOther: boolean }> = {};
-      const likertMap = getLikertScoreMap(options);
-      options.forEach(opt => {
-        const normOpt = opt.trim().toLowerCase();
-        let scoreRaw = question.scoreMap ? question.scoreMap[normOpt] : undefined;
+      const likertMap = getLikertScoreMap(normalizedOptions);
+      normalizedOptions.forEach(opt => {
+        let scoreRaw = question.scoreMap ? question.scoreMap[opt] : undefined;
         let score: number = 3;
         let isOther = false;
         if (typeof scoreRaw === 'number') {
@@ -482,20 +610,50 @@ const QuestionTypePage: React.FC = () => {
         } else if (scoreRaw === '기타') {
           score = 3;
           isOther = true;
-        } else if (likertMap && typeof likertMap[normOpt] === 'number') {
-          score = likertMap[normOpt];
+        } else if (likertMap && typeof likertMap[opt] === 'number') {
+          score = likertMap[opt];
           isOther = false;
         }
         initialMap[opt] = { score, isOther };
       });
       setLocalScoreMap(initialMap);
+      
+      // displayTexts 초기화 - 점수 순서에 맞게 정렬하여 매핑
+      const displayTextsInit: Record<string, string> = {};
+      const defaultTexts = getDefaultLikertTexts(normalizedOptions);
+      
+      // 점수 순서로 정렬된 옵션 생성 (5점→1점)
+      const sortedOptions = [...normalizedOptions].sort((a, b) => {
+        const scoreA = initialMap[a]?.score || 3;
+        const scoreB = initialMap[b]?.score || 3;
+        return scoreB - scoreA; // 내림차순 (5점→1점)
+      });
+      
+      // 기존 displayTexts가 있으면 사용, 없으면 디폴트 텍스트 사용
+      if (question.displayTexts && question.displayTexts.length > 0) {
+        // 기존 displayTexts를 점수 순서에 맞게 매핑
+        sortedOptions.forEach((opt, idx) => {
+          displayTextsInit[opt] = question.displayTexts![idx] || defaultTexts[idx] || '';
+        });
+      } else {
+        // 디폴트 텍스트 사용
+        sortedOptions.forEach((opt, idx) => {
+          displayTextsInit[opt] = defaultTexts[idx] || '';
+        });
+      }
+      
+      setLocalDisplayTexts(displayTextsInit);
       // eslint-disable-next-line
     }, [question.id, showEditor]);
+    
     const handleScoreChange = (opt: string, score: number) => {
       setLocalScoreMap(prev => ({ ...prev, [opt]: { ...prev[opt], score } }));
     };
     const handleOtherChange = (opt: string, checked: boolean) => {
       setLocalScoreMap(prev => ({ ...prev, [opt]: { ...prev[opt], isOther: checked } }));
+    };
+    const handleDisplayTextChange = (opt: string, value: string) => {
+      setLocalDisplayTexts(prev => ({ ...prev, [opt]: value }));
     };
     const handleSave = () => {
       const entries = Object.entries(localScoreMap);
@@ -503,31 +661,66 @@ const QuestionTypePage: React.FC = () => {
         ...entries.filter(([_, v]) => !v.isOther).sort((a, b) => b[1].score - a[1].score),
         ...entries.filter(([_, v]) => v.isOther)
       ];
+      
       const newScoreMap: Record<string, any> = {};
-      const newOptions: string[] = [];
+      const newOptions: string[] = []; // 점수 순으로 정렬된 응답값 (e.g., 5, 4, 3...)
+      const textToScoreMap: Record<string, string> = {}; // 원본 텍스트 -> 점수 매핑
+
       sortedEntries.forEach(([opt, { score, isOther }]) => {
-        const norm = opt.trim().toLowerCase();
-        newScoreMap[norm] = isOther ? '기타' : score;
-        newOptions.push(opt);
+        const scoreStr = String(score);
+        newOptions.push(scoreStr);
+        newScoreMap[scoreStr] = score;
+        if(isOther) newScoreMap[scoreStr] = '기타';
+        textToScoreMap[opt] = scoreStr;
       });
+
       if (!surveyData) return;
+      // displayTexts는 점수 순 정렬(5→1)에 맞춰, 원본 응답값에 대응하는 텍스트를 추출
+      const newDisplayTexts: string[] = sortedEntries.map(([opt]) => localDisplayTexts[opt] || '');
+      console.log('[DEBUG] LikertScoreMappingEditor - newDisplayTexts:', newDisplayTexts);
+      console.log('[DEBUG] LikertScoreMappingEditor - sortedEntries:', sortedEntries);
+      console.log('[DEBUG] LikertScoreMappingEditor - localDisplayTexts:', localDisplayTexts);
+      
+      const colIdx = parseInt(question.id.replace(/\D/g, ''));
+
+      // 1. 원본 데이터(rows)의 응답값을 새로운 점수 체계에 맞게 변환
+      const updatedRows = surveyData.rows.map(row => {
+        const originalValue = String(row[colIdx] || '').trim();
+        const mappedValue = textToScoreMap[originalValue];
+        if (mappedValue !== undefined) {
+          const newRow = [...row];
+          newRow[colIdx] = mappedValue;
+          return newRow;
+        }
+        return row;
+      });
+      
+      // 2. questions 배열 업데이트
       const updatedQuestions = surveyData.questions.map(q =>
-        q.id === question.id ? { ...q, scoreMap: newScoreMap, options: newOptions } : q
+        q.id === question.id ? { ...q, scoreMap: newScoreMap, options: newOptions, displayTexts: newDisplayTexts } : q
       );
+      
+      // 3. questionTypes 배열 업데이트
+      const updatedQuestionTypes = surveyData.questionTypes.map(qt =>
+        qt.columnIndex === colIdx 
+          ? { ...qt, scoreMap: newScoreMap, options: newOptions, displayTexts: newDisplayTexts, responseOrder: newOptions }
+          : qt
+      );
+      
       setSurveyData({
         ...surveyData,
         questions: updatedQuestions,
-        headers: surveyData ? surveyData.headers ?? [] : [],
-        rows: surveyData ? surveyData.rows ?? [] : [],
-        questionTypes: surveyData ? surveyData.questionTypes ?? [] : [],
-        questionRowIndex: surveyData ? surveyData.questionRowIndex ?? 0 : 0,
-        title: surveyData ? surveyData.title ?? '' : '',
-        description: surveyData ? surveyData.description ?? '' : '',
-        totalResponses: surveyData ? surveyData.totalResponses ?? 0 : 0,
+        questionTypes: updatedQuestionTypes,
+        rows: updatedRows, // 변환된 원본 데이터로 업데이트
+        headers: surveyData.headers,
+        questionRowIndex: surveyData.questionRowIndex,
+        title: surveyData.title,
+        description: surveyData.description,
+        totalResponses: surveyData.totalResponses,
       });
       setShowEditor(false);
     };
-    if (options.length === 0) return null;
+    if (normalizedOptions.length === 0) return null;
     return (
       <div className="mt-2">
         <button
@@ -544,11 +737,12 @@ const QuestionTypePage: React.FC = () => {
                 <tr className="text-gray-700">
                   <th className="text-left">응답값</th>
                   <th className="text-left">점수</th>
+                  <th className="text-left">라벨 텍스트</th>
                   <th className="text-left">기타 응답</th>
           </tr>
         </thead>
         <tbody>
-                {options.map(opt => (
+                {normalizedOptions.map(opt => (
                   <tr key={opt}>
                     <td className="py-1 pr-2">{opt}</td>
                     <td>
@@ -563,6 +757,15 @@ const QuestionTypePage: React.FC = () => {
                         ))}
                       </select>
               </td>
+                    <td>
+                      <input
+                        className="border rounded px-1 py-0.5 text-xs w-32"
+                        type="text"
+                        value={localDisplayTexts[opt] || ''}
+                        onChange={e => handleDisplayTextChange(opt, e.target.value)}
+                        placeholder="예: 매우 그렇다"
+                      />
+                    </td>
                     <td>
                       <input
                         type="checkbox"
@@ -586,32 +789,36 @@ const QuestionTypePage: React.FC = () => {
     );
   };
 
-  // MatrixLikertScoreMappingInfo/Editor도 동일하게 options 전체 기준으로 매핑/에디터 표시/저장
+  // MatrixLikertScoreMappingInfo도 동일하게 displayTexts 표시
   const MatrixLikertScoreMappingInfo = ({ question, extraResponses }: { question: Question, extraResponses?: string[] }) => {
-    if (!question.options) return null;
-    const scoreMap = question.scoreMap || getLikertScoreMap(question.options);
-    const fallbackMap = getLikertScoreMap(question.options);
+    if (!question.options || question.type !== 'likert') return null;
+    // options를 항상 string으로 변환 후 trim
+    const normalizedOptions = (question.options ?? []).map(opt => String(opt).trim());
+    const scoreMap = question.scoreMap || getLikertScoreMap(normalizedOptions);
+    const fallbackMap = getLikertScoreMap(normalizedOptions);
     if (!scoreMap && !fallbackMap) return null;
     const etcResponses = (extraResponses || []).filter(
-      resp => !(question.options ?? []).some(opt => opt.trim().toLowerCase() === resp.trim().toLowerCase())
+      resp => !(normalizedOptions).some(opt => opt.trim().toLowerCase() === resp.trim().toLowerCase())
     );
-    const entries = (question.options ?? []).map(opt => {
-      const normOpt = opt.trim().toLowerCase();
-      const score = scoreMap?.[normOpt];
-      return { label: opt, norm: normOpt, score };
+    const entries = normalizedOptions.map(opt => {
+      const norm = opt.trim().toLowerCase();
+      const score = scoreMap?.[norm];
+      return { label: opt, norm: norm, score };
     });
     return (
       <div className="mt-2 p-2 bg-gray-50 rounded text-sm">
         <h4 className="font-medium text-gray-700 mb-1">리커트 스코어 매핑:</h4>
         <div className="space-y-1">
-          {entries.map((entry) => {
+          {entries.map((entry, idx) => {
             const { label, norm, score } = entry;
+            const displayText = question.displayTexts?.[idx] || '';
             if (typeof score === 'string' && score === '기타') {
               return (
                 <div key={label} className="flex items-center gap-2">
                   <span className="text-gray-600">{label}</span>
                   <span className="text-gray-400">→</span>
                   <span className="font-medium text-gray-400">기타 응답</span>
+                  {displayText && <span className="text-gray-500 text-xs">({displayText})</span>}
                 </div>
               );
             }
@@ -623,6 +830,7 @@ const QuestionTypePage: React.FC = () => {
                 <span className="font-medium text-blue-600">
                   {typeof score === 'number' ? score : fallback}점
                 </span>
+                {displayText && <span className="text-gray-500 text-xs">({displayText})</span>}
               </div>
             );
           })}
@@ -641,9 +849,23 @@ const QuestionTypePage: React.FC = () => {
   const MatrixLikertScoreMappingEditor = ({ group }: { group: MatrixGroup }) => {
     const { surveyData, setSurveyData } = useSurveyStore();
     const [localScoreMap, setLocalScoreMap] = useState<Record<string, { score: number, isOther: boolean }>>({});
+    const [localDisplayTexts, setLocalDisplayTexts] = useState<Record<string, string>>({});
     const [showEditor, setShowEditor] = useState(false);
     const question = group.questions[0];
     const options = question.options ?? [];
+    
+    // 디폴트 리커트 텍스트 - 점수 순서(5점→1점)에 맞게
+    const getDefaultLikertTexts = (options: string[]) => {
+      if (options.length === 5) {
+        return ['매우 그렇다', '그렇다', '보통', '그렇지 않다', '전혀 그렇지 않다'];
+      } else if (options.length === 4) {
+        return ['매우 그렇다', '그렇다', '그렇지 않다', '전혀 그렇지 않다'];
+      } else if (options.length === 3) {
+        return ['그렇다', '보통', '그렇지 않다'];
+      }
+      return options.map(() => '');
+    };
+    
     useEffect(() => {
       const initialMap: Record<string, { score: number, isOther: boolean }> = {};
       const likertMap = getLikertScoreMap(options);
@@ -665,13 +887,43 @@ const QuestionTypePage: React.FC = () => {
         initialMap[opt] = { score, isOther };
       });
       setLocalScoreMap(initialMap);
+      
+      // displayTexts 초기화 - 점수 순서에 맞게 정렬하여 매핑
+      const displayTextsInit: Record<string, string> = {};
+      const defaultTexts = getDefaultLikertTexts(options);
+      
+      // 점수 순서로 정렬된 옵션 생성 (5점→1점)
+      const sortedOptions = [...options].sort((a, b) => {
+        const scoreA = initialMap[a]?.score || 3;
+        const scoreB = initialMap[b]?.score || 3;
+        return scoreB - scoreA; // 내림차순 (5점→1점)
+      });
+      
+      // 기존 displayTexts가 있으면 사용, 없으면 디폴트 텍스트 사용
+      if (question.displayTexts && question.displayTexts.length > 0) {
+        // 기존 displayTexts를 점수 순서에 맞게 매핑
+        sortedOptions.forEach((opt, idx) => {
+          displayTextsInit[opt] = question.displayTexts![idx] || defaultTexts[idx] || '';
+        });
+      } else {
+        // 디폴트 텍스트 사용
+        sortedOptions.forEach((opt, idx) => {
+          displayTextsInit[opt] = defaultTexts[idx] || '';
+        });
+      }
+      
+      setLocalDisplayTexts(displayTextsInit);
       // eslint-disable-next-line
     }, [question.id, showEditor]);
+    
     const handleScoreChange = (opt: string, score: number) => {
       setLocalScoreMap(prev => ({ ...prev, [opt]: { ...prev[opt], score } }));
     };
     const handleOtherChange = (opt: string, checked: boolean) => {
       setLocalScoreMap(prev => ({ ...prev, [opt]: { ...prev[opt], isOther: checked } }));
+    };
+    const handleDisplayTextChange = (opt: string, value: string) => {
+      setLocalDisplayTexts(prev => ({ ...prev, [opt]: value }));
     };
     const handleSave = () => {
       const entries = Object.entries(localScoreMap);
@@ -679,35 +931,72 @@ const QuestionTypePage: React.FC = () => {
         ...entries.filter(([_, v]) => !v.isOther).sort((a, b) => b[1].score - a[1].score),
         ...entries.filter(([_, v]) => v.isOther)
       ];
+      
       const newScoreMap: Record<string, any> = {};
-      const newOptions: string[] = [];
+      const newOptions: string[] = []; // 점수 순으로 정렬된 응답값 (e.g., 5, 4, 3...)
+      const textToScoreMap: Record<string, string> = {}; // 원본 텍스트 -> 점수 매핑
+
       sortedEntries.forEach(([opt, { score, isOther }]) => {
-        const norm = opt.trim().toLowerCase();
-        newScoreMap[norm] = isOther ? '기타' : score;
-        newOptions.push(opt);
+        const scoreStr = String(score);
+        newOptions.push(scoreStr);
+        newScoreMap[scoreStr] = score;
+        if(isOther) newScoreMap[scoreStr] = '기타';
+        textToScoreMap[opt] = scoreStr;
       });
+
       if (!surveyData) return;
-      // 세트 내 모든 소문항에 일괄 적용
+      // displayTexts는 점수 순 정렬(5→1)에 맞춰, 원본 응답값에 대응하는 텍스트를 추출
+      const newDisplayTexts: string[] = sortedEntries.map(([opt]) => localDisplayTexts[opt] || '');
+      console.log('[DEBUG] LikertScoreMappingEditor - newDisplayTexts:', newDisplayTexts);
+      console.log('[DEBUG] LikertScoreMappingEditor - sortedEntries:', sortedEntries);
+      console.log('[DEBUG] LikertScoreMappingEditor - localDisplayTexts:', localDisplayTexts);
+      
+      const colIdxs = group.questions.map(q => parseInt(q.id.replace(/\D/g, '')));
+
+      // 1. 원본 데이터(rows)의 응답값을 새로운 점수 체계에 맞게 변환
+      const updatedRows = surveyData.rows.map(row => {
+        const newRow = [...row];
+        let changed = false;
+        colIdxs.forEach(colIdx => {
+          const originalValue = String(row[colIdx] || '').trim();
+          const mappedValue = textToScoreMap[originalValue];
+          if (mappedValue !== undefined) {
+            newRow[colIdx] = mappedValue;
+            changed = true;
+          }
+        });
+        return changed ? newRow : row;
+      });
+      
+      // 2. questions 배열 업데이트
       const updatedQuestions = surveyData.questions.map(q =>
         group.questions.some(gq => gq.id === q.id)
-          ? { ...q, scoreMap: newScoreMap, options: newOptions }
+          ? { ...q, scoreMap: newScoreMap, options: newOptions, displayTexts: newDisplayTexts }
           : q
       );
+      
+      // 3. questionTypes 배열 업데이트
+      const updatedQuestionTypes = surveyData.questionTypes.map(qt =>
+        colIdxs.includes(qt.columnIndex)
+          ? { ...qt, scoreMap: newScoreMap, options: newOptions, displayTexts: newDisplayTexts, responseOrder: newOptions }
+          : qt
+      );
+      
       setSurveyData({
         ...surveyData,
         questions: updatedQuestions,
+        questionTypes: updatedQuestionTypes,
+        rows: updatedRows, // 변환된 원본 데이터로 업데이트
         matrixGroups: (surveyData.matrixGroups || []).map(g =>
           g.id === group.id
-            ? { ...g, questions: g.questions.map(gq => ({ ...gq, scoreMap: newScoreMap, options: newOptions })) }
+            ? { ...g, scoreMap: newScoreMap, options: newOptions, displayTexts: newDisplayTexts }
             : g
         ),
-        headers: surveyData ? surveyData.headers ?? [] : [],
-        rows: surveyData ? surveyData.rows ?? [] : [],
-        questionTypes: surveyData ? surveyData.questionTypes ?? [] : [],
-        questionRowIndex: surveyData ? surveyData.questionRowIndex ?? 0 : 0,
-        title: surveyData ? surveyData.title ?? '' : '',
-        description: surveyData ? surveyData.description ?? '' : '',
-        totalResponses: surveyData ? surveyData.totalResponses ?? 0 : 0,
+        headers: surveyData.headers,
+        questionRowIndex: surveyData.questionRowIndex,
+        title: surveyData.title,
+        description: surveyData.description,
+        totalResponses: surveyData.totalResponses,
       });
       setShowEditor(false);
     };
@@ -728,6 +1017,7 @@ const QuestionTypePage: React.FC = () => {
                 <tr className="text-gray-700">
                   <th className="text-left">응답값</th>
                   <th className="text-left">점수</th>
+                  <th className="text-left">라벨 텍스트</th>
                   <th className="text-left">기타 응답</th>
                 </tr>
               </thead>
@@ -746,6 +1036,15 @@ const QuestionTypePage: React.FC = () => {
                           <option key={score} value={score}>{score}점</option>
               ))}
             </select>
+                    </td>
+                    <td>
+                      <input
+                        className="border rounded px-1 py-0.5 text-xs w-32"
+                        type="text"
+                        value={localDisplayTexts[opt] || ''}
+                        onChange={e => handleDisplayTextChange(opt, e.target.value)}
+                        placeholder="예: 매우 그렇다"
+                      />
                     </td>
                     <td>
                       <input
@@ -888,6 +1187,7 @@ const QuestionTypePage: React.FC = () => {
                 if (!isNaN(idx)) colIdx = idx;
               }
               const header = (typeof questionRowIndex === 'number' && questionRowIndex > 0 && headers && headers[colIdx]) ? headers[colIdx] : null;
+              console.log(question.type);
               return (
                 <div key={question.id} className="flex items-start justify-between">
                   <div className="flex-1">
@@ -967,6 +1267,7 @@ const QuestionTypePage: React.FC = () => {
                         if (!isNaN(idx)) colIdx = idx;
                       }
                       const header = (typeof surveyData?.questionRowIndex === 'number' && surveyData?.questionRowIndex > 0 && surveyData?.headers && surveyData?.headers[colIdx]) ? surveyData.headers[colIdx] : null;
+                      console.log(question.type);
                       return (
                         <div key={question.id} className="flex items-center justify-between">
                           <div className="flex-1">

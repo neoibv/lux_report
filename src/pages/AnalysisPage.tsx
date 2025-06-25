@@ -127,9 +127,18 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
   // 분석용 데이터: 복수응답 '_Others'를 '기타'로 변환
   const processedRows = getProcessedRows(surveyData);
 
+  // 분석용 문항 리스트 생성 시 'skip' 제외 및 columnIndex 부여
+  const analysisQuestions = surveyData.questions
+    .filter(q => (q.type as any) !== 'skip')
+    .map(q => ({ ...q, columnIndex: parseInt(q.id.replace(/\D/g, '')) }));
+
+  // selectedQuestions도 columnIndex만 저장
+  const filteredSelectedQuestions = analysisState.selectedQuestions.filter(colIdx =>
+    analysisQuestions.some(q => q.columnIndex === colIdx)
+  );
+
   // 문항 필터링(검색)
-  const filteredQuestions = surveyData.questions
-    .map((q: any, idx: any) => ({ ...q, columnIndex: idx }))
+  const filteredQuestions = analysisQuestions
     .filter((q: any) => {
       const qText = q.text || '';
       return qText.toLowerCase().includes(search.toLowerCase());
@@ -154,7 +163,9 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
   }, [analysisState.selectedQuestions]);
 
   // 전체 선택(주관식, 행렬형 제외) 체크박스 상태
-  const nonSubjectiveIndexes = filteredQuestions.filter(qt => qt.type !== 'open' && qt.type !== 'matrix').map(qt => qt.columnIndex);
+  const nonSubjectiveIndexes = filteredQuestions
+    .filter(qt => qt.type !== 'open' && qt.type !== 'matrix' && !qt.matrixGroupId)
+    .map(qt => qt.columnIndex);
   const allNonSubjectiveSelected = nonSubjectiveIndexes.length > 0 && nonSubjectiveIndexes.every(idx => analysisState.selectedQuestions.includes(idx));
   const handleSelectAllNonSubjective = () => {
     if (allNonSubjectiveSelected) {
@@ -181,7 +192,7 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
     console.log('handleCreateCharts - 시작');
     console.log('handleCreateCharts - surveyData:', surveyData);
     console.log('handleCreateCharts - processedRows:', processedRows);
-    console.log('handleCreateCharts - selectedQuestions:', analysisState.selectedQuestions);
+    console.log('handleCreateCharts - selectedQuestions:', filteredSelectedQuestions);
     
     // matrixGroupId별로 그룹핑
     const matrixGroups: Record<number, any[]> = {};
@@ -192,19 +203,26 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
       }
     });
 
+    const sortedMatrixGroups = Object.entries(matrixGroups)
+      .sort((a, b) => Number(a[0]) - Number(b[0]))
+      .map(([groupId, groupQs]) => ({
+        groupId,
+        groupQs: groupQs.sort((a, b) => a.columnIndex - b.columnIndex)
+      }));
+
     const newCharts: any[] = [];
     const usedMatrixGroups = new Set<string>();
 
-    const total = analysisState.selectedQuestions.length;
+    const total = filteredSelectedQuestions.length;
     let done = 0;
-    analysisState.selectedQuestions.forEach(qIdx => {
-      // 항상 surveyData.questions에서 최신 정보 참조
-      const q = surveyData.questions[qIdx];
+    filteredSelectedQuestions.forEach(colIdx => {
+      const q = analysisQuestions.find(q => q.columnIndex === colIdx);
       if (!q) return;
-      const qt = { ...q, columnIndex: qIdx };
+      const qt = { ...q, columnIndex: colIdx };
 
-      // matrix 그룹 처리: type이 'matrix'인 경우에만 세트로 묶음
-      if (qt.type === 'matrix' && qt.matrixGroupId !== undefined) {
+      console.log(`[DEBUG] 문항 ${colIdx}: type=${qt?.type}, displayTexts=`, qt?.displayTexts);
+      
+      if (qt?.type === 'matrix' && qt?.matrixGroupId) {
         if (usedMatrixGroups.has(String(qt.matrixGroupId))) return;
         usedMatrixGroups.add(String(qt.matrixGroupId));
         const groupQs = Object.values(surveyData.questions)
@@ -311,7 +329,8 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
           matrixTitle,
           responseOrder: responseOrderForCard, // responseOrder 전달
           ...(qt?.scores ? { scores: qt.scores } : {}),
-          avgScore: avgScore
+          avgScore: avgScore,
+          ...(qt.displayTexts ? { displayTexts: qt.displayTexts } : {})
         });
         return;
       }
@@ -323,11 +342,12 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
       let responseOrder: string[] | undefined = undefined;
       let scores: number[] | undefined = undefined;
       let avgScore: number | undefined = undefined;
+      let displayTexts: string[] | undefined = undefined;
 
       if (questionType === 'multiple_select') {
         // 복수응답: 옵션별 count 집계, 기타응답은 하나로 묶음
         const allIndividualResponses = processedRows.flatMap((row: any[]) => {
-          const cellValue = row[qIdx];
+          const cellValue = row[colIdx];
           if (typeof cellValue !== 'string' || cellValue.trim() === '') return [];
           // '@@' 또는 ',' 를 구분자로 사용
           return cellValue.split(/@@|,/).map(s => s.trim()).filter(Boolean);
@@ -371,80 +391,88 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
         chartData = finalData;
         respondentCount = processedRows.length; // 응답자 수 기준
         responseOrder = qt.options;
+        displayTexts = qt.displayTexts;
       } else if (questionType === 'likert') {
         // 리커트: 옵션별 value 합산, scoreMap, 평균점수
-        const values = processedRows.map((row: any[]) => row[qIdx])
+        const values = processedRows.map((row: any[]) => row[colIdx])
           .filter((v: any) => typeof v === 'string' && v.trim() !== '') as string[];
         const counts: Record<string, number> = {};
+        values.forEach(v => {
+          const normV = String(v).trim();
+          counts[normV] = (counts[normV] || 0) + 1;
+        });
         // 자동 scoreMap 생성
         let scoreMap = qt.scoreMap;
-        if (!scoreMap && qt.options && qt.options.length === 5) {
-          scoreMap = qt.options.reduce((acc: any, opt: string, idx: number) => {
-            acc[opt.trim().toLowerCase()] = 5 - idx;
+        let optionOrder: string[] = qt.options ? qt.options.map(opt => String(opt).trim()) : (scoreMap ? Object.keys(scoreMap) : []);
+        if (!scoreMap && optionOrder.length === 5) {
+          scoreMap = optionOrder.reduce((acc: any, opt: string, idx: number) => {
+            acc[String(opt).trim()] = 5 - idx;
             return acc;
           }, {});
         }
-        values.forEach(v => {
-          counts[v] = (counts[v] || 0) + 1;
-        });
+        
+        // scoreMap 순서에 맞게 optionOrder 정렬 (5점→1점)
+        if (scoreMap) {
+          optionOrder.sort((a, b) => {
+            const scoreA = scoreMap[String(a).trim()] || 0;
+            const scoreB = scoreMap[String(b).trim()] || 0;
+            return scoreB - scoreA; // 내림차순 (5점→1점)
+          });
+        }
+        
         // options 전체 기준으로 chartData 생성 (0건도 포함, isOther: false)
-        const optionOrder: string[] = qt.options || (scoreMap ? Object.keys(scoreMap) : []);
+        const total = optionOrder.reduce((sum, label) => sum + (counts[String(label).trim()] || 0), 0);
         chartData = optionOrder.map((label: string) => {
-          const normLabel = label.trim().toLowerCase();
+          const normLabel = String(label).trim();
+          const count = counts[normLabel] || 0;
           return {
             label,
-            value: counts[label] || 0,
-            count: counts[label] || 0,
+            value: total > 0 ? (count / total) * 100 : 0,
+            count,
             isOther: false
           };
         });
         // 기타응답(실제 응답값 중 options에 없는 값) 별도 추가
-        const etcResponses = Object.keys(counts).filter(v => !optionOrder.includes(v));
-        etcResponses.forEach(v => {
+        const etcResponses = Object.keys(counts).filter(v => !optionOrder.includes(String(v).trim()));
+        etcResponses.forEach((etcLabel) => {
+          const count = counts[etcLabel] || 0;
           chartData.push({
-            label: `기타(${v})`,
-            value: counts[v],
-            count: counts[v],
+            label: etcLabel,
+            value: total > 0 ? (count / total) * 100 : 0,
+            count,
             isOther: true
           });
         });
-        // 평균 계산 (options/scoreMap 기준, 빈 응답값도 포함)
-        let totalScore = 0, totalCount = 0;
-        optionOrder.forEach(label => {
-          const normLabel = label.trim().toLowerCase();
-          const score = scoreMap ? scoreMap[normLabel] : undefined;
-          const count = counts[label] || 0;
-          if (typeof score === 'number') {
-            totalScore += score * count;
-            totalCount += count;
-          }
-        });
-        avgScore = totalCount > 0 ? Math.round((totalScore / totalCount) * 100) / 100 : 0;
         respondentCount = values.length;
         responseOrder = optionOrder;
         scores = qt.scores;
+        displayTexts = qt.displayTexts;
+        console.log(`[DEBUG] likert 문항 ${colIdx}: qt.displayTexts =`, qt.displayTexts);
+        console.log(`[DEBUG] likert 문항 ${colIdx}: displayTexts =`, displayTexts);
       } else if (questionType === 'multiple') {
         // 객관식: 옵션별 value 합산
-        const values = processedRows.map((row: any[]) => row[qIdx])
+        const values = processedRows.map((row: any[]) => row[colIdx])
           .filter((v: any) => typeof v === 'string' && v.trim() !== '') as string[];
-        
         const counts: Record<string, number> = {};
         values.forEach(v => {
           counts[v] = (counts[v] || 0) + 1;
         });
-
-        chartData = (qt.options || []).map((label: string) => ({
-          label,
-          value: counts[label] || 0,
-          count: counts[label] || 0,
-          isOther: false
-        }));
-
+        const total = (qt.options || []).reduce((sum, label) => sum + (counts[label] || 0), 0);
+        chartData = (qt.options || []).map((label: string) => {
+          const count = counts[label] || 0;
+          return {
+            label,
+            value: total > 0 ? (count / total) * 100 : 0, // 비율(%)로 변환
+            count,
+            isOther: false
+          };
+        });
         respondentCount = values.length;
         responseOrder = qt.options;
+        displayTexts = qt.displayTexts;
       } else if (questionType === 'open') {
         // 주관식: 모든 응답 텍스트를 data에 넣되, 5000개 초과 시 무작위 5000개만 추출
-        let values = processedRows.map((row: any[]) => row[qIdx])
+        let values = processedRows.map((row: any[]) => row[colIdx])
           .filter((v: any) => typeof v === 'string' && v.trim() !== '') as string[];
         if (values.length > 5000) {
           const shuffled = [...values].sort(() => Math.random() - 0.5);
@@ -456,10 +484,11 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
           count: 1
         }));
         respondentCount = values.length;
+        displayTexts = qt.displayTexts;
       }
 
       newCharts.push({
-        questionIndex: qIdx,
+        questionIndex: colIdx,
         chartType: analysisState.selectedChartType, // 사용자가 선택한 차트 타입 사용
         questionType: { ...qt, type: questionType },
         gridSize: { w: 1, h: 1 },
@@ -468,7 +497,8 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
         scoreMap: qt.scoreMap,
         responseOrder,
         scores,
-        avgScore: avgScore // 평균점수 명시적으로 전달
+        avgScore: avgScore, // 평균점수 명시적으로 전달
+        ...(displayTexts ? { displayTexts } : {})
       });
       done++;
       setProgress(Math.round((done / total) * 100));
@@ -476,9 +506,14 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
     });
 
     console.log('handleCreateCharts - 생성된 차트:', newCharts);
-    setAnalysisState(prev => ({ ...prev, charts: [...prev.charts, ...newCharts.filter(nc => !prev.charts.some(c => c.questionIndex === nc.questionIndex))] }));
-    // 그래프 생성 후 선택 해제
-    setAnalysisState(prev => ({ ...prev, selectedQuestions: [] }));
+    // 기존 동일 questionIndex 차트가 있으면 교체, 없으면 추가
+    setAnalysisState(prev => {
+      const existingCharts = prev.charts.filter(c => !newCharts.some(nc => nc.questionIndex === c.questionIndex));
+      return {
+        ...prev,
+        charts: [...existingCharts, ...newCharts],
+      };
+    });
     setProgress(100);
     setProgressMsg('그래프 생성 완료');
     setTimeout(() => setIsLoading(false), 500);
@@ -699,6 +734,12 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
                     matrixGroups[qt.matrixGroupId].push(qt);
                   }
                 });
+                const sortedMatrixGroups = Object.entries(matrixGroups)
+                  .sort((a, b) => Number(a[0]) - Number(b[0]))
+                  .map(([groupId, groupQs]) => ({
+                    groupId,
+                    groupQs: groupQs.sort((a, b) => a.columnIndex - b.columnIndex)
+                  }));
                 return (
                   <div key={type} className={`rounded-lg border-2 ${typeColors[t].border} ${typeColors[t].bg} p-3`}>
                     <div className="flex items-center gap-2 mb-3">
@@ -742,7 +783,7 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
                     </div>
                     {expandedGroups[type] && (
                       <>
-                        {Object.entries(matrixGroups).map(([groupId, groupQs]) => {
+                        {sortedMatrixGroups.map(({ groupId, groupQs }) => {
                           // 그룹 전체 선택 여부
                           const allGroupSelected = groupQs.every((qt: any) => analysisState.selectedQuestions.includes(qt.columnIndex));
                           const handleGroupSelect = () => {
@@ -981,6 +1022,7 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
                       avgScore={c.avgScore}
                       headers={surveyData.headers}
                       questionRowIndex={Number(c.questionIndex)}
+                      displayTexts={c.displayTexts}
                     />
                   </div>
                 );

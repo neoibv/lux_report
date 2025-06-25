@@ -52,6 +52,7 @@ interface ChartCardProps {
     questionRowIndex?: number;
   };
   onTitleChange: (newTitle: string) => void;
+  displayTexts?: string[];
 }
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, ArcElement, Tooltip, Legend, Title);
@@ -137,6 +138,15 @@ function getTextColorForBackground(hexColor: string) {
 // 라벨 가공 함수 추가
 function ellipsisLabel(label: string, max = 10) {
   return label.length > max ? label.slice(0, max) + '...' : label;
+}
+
+// 이미 '(텍스트)'가 포함된 라벨이면 중복 추가를 피하고, 없으면 "라벨 (텍스트)"로 합치는 헬퍼
+function concatLabel(base: string, text: string) {
+  if (!text) return base;
+  const trimmed = base.trim();
+  // 이미 괄호가 포함되어 있으면 그대로 사용
+  if (/\(.+\)/.test(trimmed)) return trimmed;
+  return `${trimmed} (${text})`;
 }
 
 // 팔레트에서 N개의 색상을 분산하여 추출하는 함수로 변경
@@ -248,25 +258,31 @@ function getStackedChartData(
   palette: string[],
   barThickness: number,
   barPercentage: number,
-  categoryPercentage: number
+  categoryPercentage: number,
+  displayTexts?: string[]
 ) {
   // labels: [질문 텍스트 1개]
   // datasets: 각 응답 옵션별로 하나씩, 값은 비율(%)
-  const total = respondentCount || data.reduce((a, b) => a + b.value, 0);
   const numDataPoints = data.filter(d => !d.isOther).length;
   const distributedColors = generateColorSet(numDataPoints, palette);
   let colorIndex = 0;
   return {
-    labels: [''], // x축(세로) 또는 y축(가로)에 카테고리 1개만
-    datasets: data.map((d) => ({
-      label: d.label,
-      data: [total ? Math.round((d.value / total) * 1000) / 10 : 0],
-      backgroundColor: d.isOther ? OTHER_GRAY : distributedColors[colorIndex++],
-      borderRadius: 0,
-      barPercentage,
-      categoryPercentage,
-      barThickness,
-    }))
+    labels: [''],
+    datasets: data.map((d, index) => {
+      let datasetLabel = d.label;
+      if (displayTexts && displayTexts.length > index) {
+        datasetLabel = concatLabel(d.label, displayTexts[index] || '');
+      }
+      return {
+        label: datasetLabel,
+        data: [d.value], // 비율(%) 그대로 사용
+        backgroundColor: d.isOther ? OTHER_GRAY : distributedColors[colorIndex++],
+        borderRadius: 0,
+        barPercentage,
+        categoryPercentage,
+        barThickness,
+      };
+    })
   };
 }
 
@@ -320,11 +336,9 @@ function getMatrixStackedChartData(
   data: Array<{ label: string; value: number; isOther?: boolean; id?: string }>,
   responseOrder: string[] | undefined,
   likertColors: string[],
-  barThickness: number
+  barThickness: number,
+  displayTexts?: string[]
 ) {
-  console.log('[MatrixStacked] Input Data:', data);
-  console.log('[MatrixStacked] Response Order:', responseOrder);
-
   const subQuestions = new Set<string>();
   data.forEach(item => {
     const parts = item.label.split('_');
@@ -333,13 +347,11 @@ function getMatrixStackedChartData(
     }
   });
   const subQuestionsArray = Array.from(subQuestions);
-  console.log('[MatrixStacked] SubQuestions:', subQuestionsArray);
 
   const likertResponsesArray = responseOrder || Array.from(new Set(data.map(item => {
     const parts = item.label.split('_');
-    return parts.length >= 2 ? parts.slice(1).join('_') : '';
-  }).filter(Boolean)));
-  console.log('[MatrixStacked] Likert Responses:', likertResponsesArray);
+    return parts.length >= 2 ? parts[1] : item.label;
+  })));
 
   const totalsBySubQuestion: Record<string, number> = {};
   subQuestionsArray.forEach(sq => {
@@ -347,7 +359,6 @@ function getMatrixStackedChartData(
       .filter(d => d.label.startsWith(sq + '_'))
       .reduce((sum, item) => sum + item.value, 0);
   });
-  console.log('[MatrixStacked] Totals by SubQuestion:', totalsBySubQuestion);
 
   const datasets = likertResponsesArray.map((likertResponse, likertIndex) => {
     const dataForThisDataset = subQuestionsArray.map((subQuestion) => {
@@ -358,8 +369,14 @@ function getMatrixStackedChartData(
       return percentage;
     });
 
+    // dataset의 label도 displayTexts가 있으면 점수 (텍스트) 형태로 생성
+    let datasetLabel = likertResponse;
+    if (displayTexts && displayTexts.length > likertIndex) {
+      datasetLabel = concatLabel(likertResponse, displayTexts[likertIndex] || '');
+    }
+
     return {
-      label: likertResponse,
+      label: datasetLabel,
       data: dataForThisDataset,
       backgroundColor: likertColors[likertIndex % likertColors.length],
       borderRadius: 0,
@@ -368,13 +385,22 @@ function getMatrixStackedChartData(
       barThickness,
     };
   });
-  console.log('[MatrixStacked] Final Datasets:', datasets);
+
+  // subQuestions가 비어있으면 likertResponses를 labels로 사용
+  let labels = subQuestionsArray.length > 0 ? subQuestionsArray : likertResponsesArray;
+  
+  // subQuestions가 비어있고 displayTexts가 있으면 점수 (텍스트) 형태로 라벨 생성
+  if (subQuestionsArray.length === 0 && displayTexts && displayTexts.length === likertResponsesArray.length) {
+    labels = likertResponsesArray.map((r, i) => {
+      const cleanText = displayTexts[i] || '';
+      return concatLabel(r, cleanText);
+    });
+  }
 
   const finalChartData = {
-    labels: subQuestionsArray,
+    labels,
     datasets
   };
-  console.log('[MatrixStacked] Final Chart Config:', finalChartData);
   
   return finalChartData;
 }
@@ -409,6 +435,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
   hideTitle = false,
   dataTable,
   onTitleChange,
+  displayTexts,
 }) => {
   const [dataTableOpen, setDataTableOpen] = useState(isReportMode);
   const chartRef = useRef<any>(null);
@@ -471,7 +498,29 @@ const ChartCard: React.FC<ChartCardProps> = ({
     
     const finalSortedData = withRowId(sortedData);
 
-    const labels = finalSortedData.map(d => d.label);
+    // displayTexts가 있으면 라벨을 '점수 (텍스트)' 형태로 합쳐서 사용
+    let labels: string[];
+    
+    if (displayTexts && displayTexts.length === finalSortedData.length) {
+      labels = finalSortedData.map((d, i) => {
+        const cleanText = displayTexts[i] || '';
+        return concatLabel(d.label, cleanText);
+      });
+    } else if (displayTexts && displayTexts.length > 0 && displayTexts.length === (finalSortedData.filter(d => !d.isOther).length)) {
+      labels = [
+        ...finalSortedData.filter(d => !d.isOther).map((d, i) => {
+          const cleanText = displayTexts[i] || '';
+          return concatLabel(d.label, cleanText);
+        }),
+        ...finalSortedData.filter(d => d.isOther).map(d => d.label)
+      ];
+    } else {
+      labels = finalSortedData.map(d => d.label);
+    }
+    // 디버깅 로그 추가
+    console.log('[ChartCard] 최종 labels:', labels);
+    console.log('[ChartCard] displayTexts:', displayTexts);
+    console.log('[ChartCard] finalSortedData:', finalSortedData);
     const values = finalSortedData.map(d => d.value);
     let backgroundColors;
     if (colors && colors.length > 0) {
@@ -490,7 +539,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
       backgroundColors,
       sortedData: finalSortedData
     };
-  }, [data, colors, questionType, chartType]);
+  }, [data, colors, questionType, chartType, displayTexts]);
 
   // --- 옵션 useMemo 분리 ---
   const matrixChartOptions = useMemo(() => {
@@ -518,7 +567,11 @@ const ChartCard: React.FC<ChartCardProps> = ({
           font: { weight: 'bold' },
           anchor: 'end' as const,
           align: 'end' as const,
-          formatter: (value: number) => value === undefined || value === null ? '' : formatNumber(value),
+          formatter: (value: number) => {
+            if (value === undefined || value === null) return '';
+            const rounded = Math.round(value * 10) / 10;
+            return Number.isInteger(rounded) ? `${rounded}%` : `${rounded.toFixed(1)}%`;
+          },
         }
       },
       indexAxis: chartType === 'verticalMatrix' ? 'x' : 'y',
@@ -593,7 +646,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
   // 행 이동 함수 (localTableData의 실제 순서 기준으로 이동, sortedTableData는 화면 표시용)
   const moveRow = (sortedIdx: number, direction: -1 | 1) => {
     const row = sortedTableData[sortedIdx];
-    const realIdx = localTableData.findIndex((r) => r.id === row.id);
+    const realIdx = localTableData.findIndex((r) => (r.id ?? '') === (row.id ?? ''));
     const to = realIdx + direction;
     if (to < 0 || to >= localTableData.length) return;
     const arr = [...localTableData];
@@ -619,7 +672,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
   }, [localTableData, sortConfig]);
 
   // label에 id를 붙여 Chart.js에 넘기기 (차트 전용 데이터 사용)
-  const chartLabels = chartData.sortedData.map(d => `${d.label}__${d.id || ''}`);
+  const chartLabels = chartData.sortedData.map(d => `${d.label}__${d.id ?? ''}`);
 
   // 총합 계산
   const totalResponses = useMemo(() => localTableData.reduce((sum: number, item: { value: number }) => sum + item.value, 0), [localTableData]);
@@ -644,14 +697,22 @@ const ChartCard: React.FC<ChartCardProps> = ({
       }
     }
 
+    // displayTexts가 적용된 라벨 생성
+    const displayLabels = chartData.sortedData.map((d, i) =>
+      displayTexts && displayTexts[i] ? concatLabel(d.label, displayTexts[i]) : d.label
+    );
+
     // 데이터 레이블 설정: 차트 유형에 따라 분기
     const datalabelsConfig = {
       display: true,
       font: { weight: 'bold' as const },
-      formatter: (value: number) => (value === undefined || value === null ? '' : `${formatNumber(value)}%`),
+      formatter: (value: number) => {
+        if (value === undefined || value === null) return '';
+        const rounded = Math.round(value * 10) / 10;
+        return Number.isInteger(rounded) ? `${rounded}%` : `${rounded.toFixed(1)}%`;
+      },
       ...(chartType === 'pie' || chartType === 'donut'
         ? {
-            // 원형/도넛은 중앙에 배치, 레이블은 검정색
             anchor: 'center' as const,
             align: 'center' as const,
             offset: 0,
@@ -659,7 +720,6 @@ const ChartCard: React.FC<ChartCardProps> = ({
             color: '#000',
           }
         : {
-            // 막대그래프는 끝 바깥쪽에 표시
             anchor: 'end' as const,
             align: 'end' as const,
             color: '#000',
@@ -685,9 +745,9 @@ const ChartCard: React.FC<ChartCardProps> = ({
                 grid: { display: true, drawOnChartArea: true, color: '#e5e7eb' },
                 ticks: {
                   callback: (v: any, idx: number) => {
-                    // chartLabels에서 id 제거 후 표시
-                    const label = chartLabels[idx] || '';
-                    return ellipsisLabel(label.split('__')[0], 10);
+                    // displayTexts가 적용된 라벨 사용
+                    const label = displayLabels[idx] || '';
+                    return ellipsisLabel(label, 10);
                   },
                   maxRotation: 45,
                   minRotation: 0,
@@ -702,8 +762,8 @@ const ChartCard: React.FC<ChartCardProps> = ({
                 grid: { display: true, drawOnChartArea: true, color: '#e5e7eb' },
                 ticks: {
                   callback: (v: any, idx: number) => {
-                    const label = chartLabels[idx] || '';
-                    return ellipsisLabel(label.split('__')[0], 10);
+                    const label = displayLabels[idx] || '';
+                    return ellipsisLabel(label, 10);
                   },
                   maxRotation: 45,
                   minRotation: 0,
@@ -713,15 +773,32 @@ const ChartCard: React.FC<ChartCardProps> = ({
             },
       } : {})
     };
-  }, [chartType, chartData.labels, chartData.values, questionType, customYMax, chartLabels]);
+  }, [chartType, chartData.labels, chartData.values, displayTexts]);
 
   const matrixChartDataConfig = useMemo(() => getMatrixChartData(chartData.sortedData, respondentCount, matrixColors, barThickness), [chartData.sortedData, respondentCount, barThickness]);
-  const matrixStackedChartDataConfig = useMemo(() => getMatrixStackedChartData(chartData.sortedData, responseOrder, likertColors, barThickness), [chartData.sortedData, responseOrder, barThickness]);
+  const matrixStackedChartDataConfig = useMemo(() => {
+    const config = getMatrixStackedChartData(data, responseOrder, likertColors, barThickness, displayTexts);
+    console.log('[ChartCard] matrixStackedChartDataConfig:', config);
+    return config;
+  }, [data, responseOrder, likertColors, barThickness, displayTexts]);
   const generalChartDataConfig = useMemo(() => {
-    // 차트 전용 데이터(chartData.sortedData)를 사용하도록 수정
+    // labels를 점수+텍스트 배열로 생성
+    const labels = chartData.sortedData.map((d, i) =>
+      displayTexts && displayTexts[i] ? concatLabel(d.label, displayTexts[i]) : d.label
+    );
+    const dataArr = chartData.sortedData.map(d => d.value);
     const base = getGeneralChartData(chartData.sortedData, questionType, respondentCount, palette, likertColors, generateColorSet, barThickness);
-    return { ...base, labels: chartLabels };
-  }, [chartData.sortedData, questionType, respondentCount, barThickness, chartLabels, palette, likertColors]);
+    const config = {
+      ...base,
+      labels,
+      datasets: [{
+        ...base.datasets[0],
+        data: dataArr,
+      }],
+    };
+    console.log('[ChartCard] generalChartDataConfig:', config);
+    return config;
+  }, [chartData.sortedData, questionType, respondentCount, barThickness, chartLabels, palette, likertColors, displayTexts]);
   const stackedChartDataConfig = useMemo(() => {
     let colorSet = palette;
     if (questionType === 'likert' || questionType === 'matrix') {
@@ -732,8 +809,12 @@ const ChartCard: React.FC<ChartCardProps> = ({
       colorSet = multiSelectColors;
     }
     const barP = 0.45, catP = 0.51;
-    return getStackedChartData(chartData.sortedData, respondentCount, colorSet, barThickness, barP, catP);
-  }, [chartData.sortedData, respondentCount, questionType, barThickness]);
+    
+    // getStackedChartData 함수를 사용하여 올바른 누적 차트 데이터 생성
+    const config = getStackedChartData(chartData.sortedData, respondentCount, colorSet, barThickness, barP, catP, displayTexts);
+    console.log('[ChartCard] stackedChartDataConfig:', config);
+    return config;
+  }, [chartData.sortedData, respondentCount, questionType, barThickness, displayTexts, palette, likertColors, objectiveColors, multiSelectColors]);
 
   // --- 옵션 useMemo 분리 ---
   const matrixStackedChartOptions = useMemo(() => ({
@@ -751,7 +832,7 @@ const ChartCard: React.FC<ChartCardProps> = ({
         font: { weight: 'bold' },
         anchor: 'center',
         align: 'center',
-        formatter: (value: number) => value === undefined || value === null ? '' : `${formatNumber(value)}%`,
+        formatter: (value: number) => value === undefined || value === null ? '' : `${value.toFixed(2)}%`,
       }
     },
     indexAxis: chartType === 'verticalMatrixStacked' ? 'x' : 'y',
@@ -813,18 +894,18 @@ const ChartCard: React.FC<ChartCardProps> = ({
         font: { weight: 'bold' },
         anchor: 'center',
         align: 'center',
-        formatter: (value: number) => value === undefined || value === null ? '' : `${formatNumber(value)}%`,
+        formatter: (value: number) => value === undefined || value === null ? '' : `${value.toFixed(2)}%`,
       }
     },
     indexAxis: chartType === 'verticalStacked' ? 'x' : 'y',
     scales: chartType === 'verticalStacked'
       ? {
-          x: { stacked: true, grid: { display: true, color: '#e5e7eb' }, ticks: { display: false } },
-          y: { stacked: true, beginAtZero: true, max: 100, ticks: { callback: (v: any) => `${v}%` } },
+          x: { stacked: true, grid: { display: true, color: '#e5e7eb' }, ticks: { display: true } },
+          y: { stacked: true, beginAtZero: true, max: 100, ticks: { display: true, callback: (v: any) => `${v}%` } },
         }
       : {
-          x: { stacked: true, beginAtZero: true, max: 100, ticks: { callback: (v: any) => `${v}%` } },
-          y: { stacked: true, grid: { display: true, color: '#e5e7eb' }, ticks: { display: false } },
+          x: { stacked: true, beginAtZero: true, max: 100, ticks: { display: true, callback: (v: any) => `${v}%` } },
+          y: { stacked: true, grid: { display: true, color: '#e5e7eb' }, ticks: { display: true } },
         },
   }), [chartType]);
 
@@ -894,15 +975,24 @@ const ChartCard: React.FC<ChartCardProps> = ({
           {/* 커스텀 범례 */}
           {responseOrder && responseOrder.length > 0 && (
             <div className="flex justify-center items-center gap-4 mt-2 mb-2">
-              {responseOrder.map((label, index) => (
-                <div key={index} className="flex items-center gap-1">
-                  <div 
-                    className="w-3 h-3 rounded-sm"
-                    style={{ backgroundColor: likertColors[index % likertColors.length] }}
-                  />
-                  <span className="text-xs text-gray-700">{label}</span>
-                </div>
-              ))}
+              {responseOrder.map((label, index) => {
+                // displayTexts가 있으면 점수 (텍스트) 형태로 표시
+                let legendLabel = label;
+                if (displayTexts && displayTexts.length > index) {
+                  const cleanText = displayTexts[index] || '';
+                  legendLabel = concatLabel(label, cleanText);
+                }
+                
+                return (
+                  <div key={index} className="flex items-center gap-1">
+                    <div 
+                      className="w-3 h-3 rounded-sm"
+                      style={{ backgroundColor: likertColors[index % likertColors.length] }}
+                    />
+                    <span className="text-xs text-gray-700">{legendLabel}</span>
+                  </div>
+                );
+              })}
             </div>
           )}
         </>
@@ -983,13 +1073,6 @@ const ChartCard: React.FC<ChartCardProps> = ({
 
   const chartMaxWidth = chartData.labels.length >= 7 ? 'max-w-[600px]' : 'max-w-[420px]';
 
-  // 카드 및 그래프 높이/너비 동적 계산
-  const baseHeight = 350;
-  const chartHeight = baseHeight + (gridSize.h - 1) * 150; // h=1:350, h=2:500, h=3:650...
-  const cardMinHeight = chartHeight + 250; // 카드 전체 높이(그래프+옵션+여백 등)
-  const baseWidth = 420;
-  const chartWidth = baseWidth + (gridSize.w - 1) * 180; // w=1:420, w=2:600, w=3:780...
-
   // 그리드 크기 변경 핸들러 수정
   const handleGridSizeChange = (direction: 'w' | 'h', delta: number) => {
     const newSize = { ...gridSize };
@@ -1028,7 +1111,55 @@ const ChartCard: React.FC<ChartCardProps> = ({
     setIsEditingTitle(false);
   };
 
-  // 모든 차트 타입에서 카드 레이아웃을 반환하도록 통일
+  // 커스텀 범례 렌더링 함수
+  const renderCustomLegend = () => {
+    if (
+      chartType === 'verticalStacked' ||
+      chartType === 'horizontalStacked' ||
+      chartType === 'pie' ||
+      chartType === 'donut'
+    ) {
+      let legendItems: { label: string; color: string }[] = [];
+      if (chartType === 'pie' || chartType === 'donut') {
+        const labels = generalChartDataConfig.labels || [];
+        const colors = generalChartDataConfig.datasets[0]?.backgroundColor || [];
+        legendItems = labels.map((label: string, i: number) => ({
+          label,
+          color: Array.isArray(colors) ? colors[i] : colors
+        }));
+      } else {
+        legendItems = stackedChartDataConfig.datasets.map((ds: any) => ({
+          label: ds.label,
+          color: ds.backgroundColor
+        }));
+      }
+      return (
+        <div className="w-full overflow-x-auto">
+          <div className="border border-gray-300 bg-white shadow-sm rounded px-4 py-2 w-fit mx-auto">
+            <div className="flex flex-nowrap justify-center items-center gap-4">
+              {legendItems.map((item, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <div
+                    className="w-4 h-4 rounded-sm border border-gray-400"
+                    style={{ backgroundColor: item.color }}
+                  />
+                  <span className="text-xs text-black whitespace-nowrap">{item.label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  // 카드 및 그래프 높이/너비 동적 계산
+  const chartHeight = 350 + (gridSize.h - 1) * 150; // h=1:350, h=2:500, h=3:650...
+  const cardMinHeight = chartHeight + 250; // 카드 전체 높이(그래프+옵션+여백 등)
+  const chartWidth = 420 + (gridSize.w - 1) * 180; // w=1:420, w=2:600, w=3:780...
+
+  // 카드 및 그래프 렌더링
   return (
     <div 
       className={containerClasses}
@@ -1132,26 +1263,8 @@ const ChartCard: React.FC<ChartCardProps> = ({
           </div>
         </div>
 
-        {/* --- 커스텀 범례 --- */}
-        {(chartType === 'pie' || chartType === 'donut' || chartType === 'verticalStacked' || chartType === 'horizontalStacked') && (
-          <div className="mt-4 p-2 border border-gray-200 rounded-md">
-            <div className="flex flex-wrap justify-center gap-x-4 gap-y-1">
-              {generalChartDataConfig.datasets[0].backgroundColor.map((color: string, index: number) => {
-                const label = chartLabels[index]?.split('__')[0];
-                if (!label) return null;
-                return (
-                  <div key={`legend-${index}`} className="flex items-center">
-                    <span
-                      className="w-3 h-3 mr-1.5 inline-block rounded-sm"
-                      style={{ backgroundColor: color }}
-                    ></span>
-                    <span className="text-xs font-semibold text-gray-800">{label}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
+        {/* 커스텀 범례를 차트 하단에 한 번만 렌더링 */}
+        {renderCustomLegend()}
 
         {/* 데이터 테이블 토글 */}
         {dataTableOpen && (
