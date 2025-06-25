@@ -447,6 +447,16 @@ const AnalysisPage: React.FC<AnalysisPageProps> = ({ analysisState, setAnalysisS
         responseOrder = optionOrder;
         scores = qt.scores;
         displayTexts = qt.displayTexts;
+        // 평균점수 계산 추가
+        let totalScore = 0, totalCount = 0;
+        values.forEach(v => {
+          const normV = String(v).trim();
+          if (!scoreMap || scoreMap[normV] === undefined) return;
+          const score = scoreMap[normV];
+          totalScore += score;
+          totalCount += 1;
+        });
+        avgScore = totalCount > 0 ? Math.round((totalScore / totalCount) * 100) / 100 : undefined;
         console.log(`[DEBUG] likert 문항 ${colIdx}: qt.displayTexts =`, qt.displayTexts);
         console.log(`[DEBUG] likert 문항 ${colIdx}: displayTexts =`, displayTexts);
       } else if (questionType === 'multiple') {
